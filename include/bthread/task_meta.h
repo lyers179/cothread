@@ -10,6 +10,7 @@ namespace bthread {
 
 // Forward declarations
 class Worker;
+struct TaskMeta;
 
 // bthread handle type
 using bthread_t = uint64_t;
@@ -24,7 +25,7 @@ enum class TaskState : uint8_t {
 
 // Waiter state - embedded in TaskMeta (not on stack!)
 struct WaiterState {
-    std::atomic<WaiterState*> next{nullptr};
+    std::atomic<TaskMeta*> next{nullptr};
     std::atomic<bool> wakeup{false};
     std::atomic<bool> timed_out{false};
     int64_t deadline_us{0};

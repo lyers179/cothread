@@ -58,9 +58,34 @@ void* AllocateStack(size_t size);
 // Deallocate a stack
 void DeallocateStack(void* stack, size_t size);
 
+// ============ Error Codes ============
+// Common error codes (matches errno values)
+constexpr int EPERM = 1;
+constexpr int ENOENT = 2;
+constexpr int ESRCH = 3;
+constexpr int EINTR = 4;
+constexpr int EIO = 5;
+constexpr int ENXIO = 6;
+constexpr int EAGAIN = 11;
+constexpr int ENOMEM = 12;
+constexpr int EACCES = 13;
+constexpr int EFAULT = 14;
+constexpr int EBUSY = 16;
+constexpr int EEXIST = 17;
+constexpr int ENODEV = 19;
+constexpr int EINVAL = 22;
+constexpr int ENOTTY = 25;
+constexpr int EDEADLK = 35;
+constexpr int ENAMETOOLONG = 36;
+constexpr int ENOSYS = 38;
+constexpr int ETIMEDOUT = 110;
+
 // ============ Futex Operations ============
 
-struct timespec;
+struct timespec {
+    int64_t tv_sec;
+    int64_t tv_nsec;
+};
 
 // Wait on address (Linux: futex, Windows: WaitOnAddress)
 int FutexWait(std::atomic<int>* addr, int expected, const timespec* timeout);

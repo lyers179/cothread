@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <climits>
+#include <cstdint>
 
 namespace bthread {
 
@@ -78,7 +79,7 @@ bool TimerThread::Cancel(int timer_id) {
 void TimerThread::TimerThreadMain() {
     while (running_.load(std::memory_order_acquire)) {
         int64_t now_us = platform::GetTimeOfDayUs();
-        int64_t next_deadline = LLONG_MAX;
+        int64_t next_deadline = INT64_MAX;
 
         {
             std::lock_guard<std::mutex> lock(heap_mutex_);
@@ -114,7 +115,7 @@ void TimerThread::TimerThreadMain() {
 
         // Calculate sleep time
         int64_t sleep_us = next_deadline - now_us;
-        if (sleep_us <= 0 || next_deadline == LLONG_MAX) {
+        if (sleep_us <= 0 || next_deadline == INT64_MAX) {
             sleep_us = 100000;  // Default 100ms sleep
         }
 

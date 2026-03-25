@@ -1,6 +1,7 @@
 #include "bthread/butex.h"
 #include "bthread/worker.h"
 #include "bthread/scheduler.h"
+#include "bthread/platform/platform.h"
 
 #include <cstring>
 

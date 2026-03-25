@@ -27,13 +27,13 @@ constexpr size_t US_PER_SEC = 1000000;
 
 struct timespec ToAbsoluteTimeout(uint64_t delay_us) {
     struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
+    int64_t now_us = platform::GetTimeOfDayUs();
 
     uint64_t delay_sec = delay_us / US_PER_SEC;
     uint64_t delay_ns = (delay_us % US_PER_SEC) * NS_PER_US;
 
-    ts.tv_sec += delay_sec;
-    ts.tv_nsec += delay_ns;
+    ts.tv_sec = static_cast<int64_t>(now_us / US_PER_SEC) + static_cast<int64_t>(delay_sec);
+    ts.tv_nsec = static_cast<int64_t>(now_us % US_PER_SEC * NS_PER_US) + static_cast<int64_t>(delay_ns);
 
     if (ts.tv_nsec >= 1000000000L) {
         ts.tv_sec++;
