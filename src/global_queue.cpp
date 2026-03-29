@@ -15,22 +15,18 @@ void GlobalQueue::Push(TaskMeta* task) {
 }
 
 TaskMeta* GlobalQueue::Pop() {
-    // Take entire list atomically
-    TaskMeta* head = head_.exchange(nullptr, std::memory_order_acq_rel);
-    if (!head) return nullptr;
-
-    // Reverse list for FIFO order
-    TaskMeta* result = nullptr;
-    TaskMeta* next = nullptr;
+    // Pop single task atomically
+    TaskMeta* head = head_.load(std::memory_order_acquire);
     while (head) {
-        next = head->next;
-        head->next = result;
-        result = head;
-        head = next;
+        TaskMeta* next = head->next;
+        if (head_.compare_exchange_weak(head, next,
+                std::memory_order_acq_rel, std::memory_order_acquire)) {
+            head->next = nullptr;
+            version_.fetch_add(1, std::memory_order_release);
+            return head;
+        }
     }
-
-    version_.fetch_add(1, std::memory_order_release);
-    return result;
+    return nullptr;
 }
 
 } // namespace bthread

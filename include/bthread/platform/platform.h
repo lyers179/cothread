@@ -36,11 +36,16 @@ constexpr size_t PAGE_SIZE = 4096;
 
 // ============ Context Switching ============
 
+// Context switching functions implemented in assembly - use C linkage
+extern "C" {
+
 // Make a new context ready to run 'fn' with 'arg'
 void MakeContext(Context* ctx, void* stack, size_t stack_size, ThreadFunc fn, void* arg);
 
 // Swap contexts: saves current context to 'from', loads 'to'
 void SwapContext(Context* from, Context* to);
+
+} // extern "C"
 
 // ============ Thread Management ============
 
@@ -60,25 +65,48 @@ void DeallocateStack(void* stack, size_t size);
 
 // ============ Error Codes ============
 // Common error codes (matches errno values)
-constexpr int EPERM = 1;
-constexpr int ENOENT = 2;
-constexpr int ESRCH = 3;
-constexpr int EINTR = 4;
-constexpr int EIO = 5;
-constexpr int ENXIO = 6;
-constexpr int EAGAIN = 11;
-constexpr int ENOMEM = 12;
-constexpr int EACCES = 13;
-constexpr int EFAULT = 14;
-constexpr int EBUSY = 16;
-constexpr int EEXIST = 17;
-constexpr int ENODEV = 19;
-constexpr int EINVAL = 22;
-constexpr int ENOTTY = 25;
-constexpr int EDEADLK = 35;
-constexpr int ENAMETOOLONG = 36;
-constexpr int ENOSYS = 38;
-constexpr int ETIMEDOUT = 110;
+// Undef Windows macros before defining our own
+#ifdef _WIN32
+#undef EPERM
+#undef ENOENT
+#undef ESRCH
+#undef EINTR
+#undef EIO
+#undef ENXIO
+#undef EAGAIN
+#undef ENOMEM
+#undef EACCES
+#undef EFAULT
+#undef EBUSY
+#undef EEXIST
+#undef ENODEV
+#undef EINVAL
+#undef ENOTTY
+#undef EDEADLK
+#undef ENAMETOOLONG
+#undef ENOSYS
+#undef ETIMEDOUT
+#endif
+
+inline constexpr int EPERM = 1;
+inline constexpr int ENOENT = 2;
+inline constexpr int ESRCH = 3;
+inline constexpr int EINTR = 4;
+inline constexpr int EIO = 5;
+inline constexpr int ENXIO = 6;
+inline constexpr int EAGAIN = 11;
+inline constexpr int ENOMEM = 12;
+inline constexpr int EACCES = 13;
+inline constexpr int EFAULT = 14;
+inline constexpr int EBUSY = 16;
+inline constexpr int EEXIST = 17;
+inline constexpr int ENODEV = 19;
+inline constexpr int EINVAL = 22;
+inline constexpr int ENOTTY = 25;
+inline constexpr int EDEADLK = 35;
+inline constexpr int ENAMETOOLONG = 36;
+inline constexpr int ENOSYS = 38;
+inline constexpr int ETIMEDOUT = 110;
 
 // ============ Futex Operations ============
 

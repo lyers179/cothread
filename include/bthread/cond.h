@@ -1,6 +1,7 @@
 #pragma once
 
-#include <pthread.h>
+#include "bthread/platform/platform.h"
+#include "bthread/mutex.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -8,7 +9,7 @@ extern "C" {
 
 struct bthread_cond_t {
     void* butex;
-    void* pthread_cond;
+    void* native_cond;  // Platform-specific condition variable
 };
 
 int bthread_cond_init(bthread_cond_t* cond, const void* attr);

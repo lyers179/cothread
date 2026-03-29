@@ -11,11 +11,10 @@
 #include "bthread/platform/platform.h"
 
 #include <cstring>
-#include <cerrno>
-#include <ctime>
 #include <thread>
 
 using namespace bthread;
+using namespace bthread::platform;
 
 // ========== bthread_t helpers ==========
 namespace {
@@ -25,9 +24,9 @@ constexpr size_t US_PER_MS = 1000;
 constexpr size_t MS_PER_SEC = 1000;
 constexpr size_t US_PER_SEC = 1000000;
 
-struct timespec ToAbsoluteTimeout(uint64_t delay_us) {
-    struct timespec ts;
-    int64_t now_us = platform::GetTimeOfDayUs();
+platform::timespec ToAbsoluteTimeout(uint64_t delay_us) {
+    platform::timespec ts;
+    int64_t now_us = GetTimeOfDayUs();
 
     uint64_t delay_sec = delay_us / US_PER_SEC;
     uint64_t delay_ns = (delay_us % US_PER_SEC) * NS_PER_US;
@@ -60,7 +59,7 @@ int bthread_create(bthread_t* tid, const bthread_attr_t* attr,
     // Set up stack
     size_t stack_size = attr ? attr->stack_size : BTHREAD_STACK_SIZE_DEFAULT;
     if (!task->stack) {
-        task->stack = platform::AllocateStack(stack_size);
+        task->stack = AllocateStack(stack_size);
         if (!task->stack) {
             GetTaskGroup().DeallocTaskMeta(task);
             return ENOMEM;
@@ -78,8 +77,8 @@ int bthread_create(bthread_t* tid, const bthread_attr_t* attr,
     task->join_butex = new Butex();
 
     // Set up context
-    platform::MakeContext(&task->context, task->stack, task->stack_size,
-                          detail::BthreadEntry, task);
+    MakeContext(&task->context, task->stack, task->stack_size,
+                detail::BthreadEntry, task);
 
     // Encode bthread_t
     *tid = GetTaskGroup().EncodeId(task->slot_index, task->generation);
@@ -166,25 +165,18 @@ void bthread_exit(void* retval) {
     task->result = retval;
     task->state.store(TaskState::FINISHED, std::memory_order_release);
 
-    // Decrement ref count
-    if (task->Release()) {
-        GetTaskGroup().DeallocTaskMeta(task);
-    }
+    // DO NOT release here - let HandleFinishedTask do it
+    // The ref_count will be decremented when the worker handles the finished task
+    // This ensures the TaskMeta is still valid during context switch
 
     // Switch back to scheduler (never returns)
     w->SuspendCurrent();
 }
 
-// ========== Synchronization Primitives ==========
-
-// Mutex implementation will be in mutex.cpp
-// Condition variable implementation will be in cond.cpp
-// Once implementation will be in once.cpp
-
 // ========== Timer ==========
 
 bthread_timer_t bthread_timer_add(void (*callback)(void*), void* arg,
-                                   const struct timespec* delay) {
+                                   const bthread_timespec* delay) {
     if (!callback || !delay) return -1;
 
     Scheduler::Instance().Init();
@@ -192,7 +184,7 @@ bthread_timer_t bthread_timer_add(void (*callback)(void*), void* arg,
     uint64_t delay_us = static_cast<uint64_t>(delay->tv_sec) * US_PER_SEC +
                        delay->tv_nsec / NS_PER_US;
 
-    struct timespec ts = ToAbsoluteTimeout(delay_us);
+    platform::timespec ts = ToAbsoluteTimeout(delay_us);
     return Scheduler::Instance().GetTimerThread()->Schedule(callback, arg, &ts);
 }
 

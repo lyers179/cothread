@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "bthread/task_meta.h"
+#include "bthread/task_group.h"
 #include "bthread/worker.h"
 #include "bthread/global_queue.h"
 
@@ -48,7 +49,7 @@ public:
     const GlobalQueue& global_queue() const { return global_queue_; }
 
     // Get task group
-    TaskGroup& task_group() { return task_group_; }
+    TaskGroup& task_group() { return GetTaskGroup(); }
 
     // Set worker count (must be called before Init)
     void set_worker_count(int32_t count) {
@@ -84,7 +85,6 @@ private:
     int32_t configured_count_{0};
 
     GlobalQueue global_queue_;
-    TaskGroup& task_group_;
 
     std::unique_ptr<TimerThread> timer_thread_;
     std::once_flag timer_init_flag_;

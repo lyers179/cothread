@@ -6,8 +6,6 @@
 #include <thread>
 #include <vector>
 
-using namespace bthread;
-
 static bthread_mutex_t mutex;
 static int counter = 0;
 
@@ -45,8 +43,8 @@ int main() {
 
     const int num_threads = 100;
     const int iterations = 100;
-    bthread_t tids[num_threads];
-    int thread_args[num_threads];
+    bthread_t tids[100];
+    int thread_args[100];
 
     for (int i = 0; i < num_threads; ++i) {
         thread_args[i] = iterations;

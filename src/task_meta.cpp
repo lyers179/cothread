@@ -1,5 +1,5 @@
 #include "bthread/task_meta.h"
-#include "bthread/bthread.h"
+#include "../include/bthread.h"
 
 namespace bthread {
 

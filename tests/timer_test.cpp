@@ -3,8 +3,6 @@
 #include <cstdio>
 #include <cassert>
 
-using namespace bthread;
-
 static int timer_called = 0;
 static bthread_t timer_tid = 0;
 
@@ -15,24 +13,36 @@ void timer_callback(void* arg) {
 }
 
 int main() {
-    printf("Testing Timer...\n");
+    // Disable buffering
+    setvbuf(stdout, NULL, _IONBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
 
-    printf("  Testing timer add...\n");
-    struct timespec delay;
+    fprintf(stderr, "Testing Timer...\n");
+
+    fprintf(stderr, "  Testing timer add...\n");
+    fflush(stderr);
+    struct bthread_timespec delay;
     delay.tv_sec = 0;
     delay.tv_nsec = 100000000;  // 100ms
 
     bthread_timer_t timer_id = bthread_timer_add(timer_callback, nullptr, &delay);
+    fprintf(stderr, "  timer_id = %d\n", timer_id);
+    fflush(stderr);
     assert(timer_id >= 0);
 
-    printf("  Testing timer cancel...\n");
+    fprintf(stderr, "  Testing timer cancel...\n");
+    fflush(stderr);
     int ret = bthread_timer_cancel(timer_id);
+    fprintf(stderr, "  cancel ret = %d\n", ret);
+    fflush(stderr);
     assert(ret == 0);
 
-    printf("  Testing invalid timer cancel...\n");
+    fprintf(stderr, "  Testing invalid timer cancel...\n");
+    fflush(stderr);
     ret = bthread_timer_cancel(-1);
     assert(ret != 0);
 
-    printf("All Timer tests passed!\n");
+    fprintf(stderr, "All Timer tests passed!\n");
+    fflush(stderr);
     return 0;
 }

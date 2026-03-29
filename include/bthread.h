@@ -7,6 +7,12 @@ extern "C" {
 #include <stddef.h>
 #include <stdint.h>
 
+// Use different name to avoid conflict with system timespec
+struct bthread_timespec {
+    int64_t tv_sec;
+    int64_t tv_nsec;
+};
+
 // ========== Basic bthread API ==========
 typedef uint64_t bthread_t;
 
@@ -53,7 +59,6 @@ void bthread_exit(void* retval);
 // ========== Synchronization Primitives ==========
 typedef struct bthread_mutex_t bthread_mutex_t;
 typedef struct bthread_cond_t bthread_cond_t;
-typedef struct bthread_once_t bthread_once_t;
 
 // Mutex
 int bthread_mutex_init(bthread_mutex_t* mutex, const void* attr);
@@ -85,7 +90,7 @@ int bthread_once(bthread_once_t* once, void (*init_routine)(void));
 typedef int bthread_timer_t;
 
 bthread_timer_t bthread_timer_add(void (*callback)(void*), void* arg,
-                                   const struct timespec* delay);
+                                   const struct bthread_timespec* delay);
 int bthread_timer_cancel(bthread_timer_t timer_id);
 
 // ========== Global Configuration ==========

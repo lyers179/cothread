@@ -1,11 +1,15 @@
 #include "bthread/worker.h"
 #include "bthread/scheduler.h"
 #include "bthread/task_meta.h"
+#include "bthread/task_group.h"
+#include "bthread/platform/platform.h"
 
 #include <random>
 #include <cstring>
 
 namespace bthread {
+
+using namespace platform;
 
 thread_local Worker* Worker::current_worker_ = nullptr;
 
@@ -107,10 +111,10 @@ void Worker::WaitForTask() {
 }
 
 void Worker::WakeUp() {
-    if (sleeping_.load(std::memory_order_acquire)) {
-        sleep_token_.fetch_add(1, std::memory_order_release);
-        platform::FutexWake(&sleep_token_, 1);
-    }
+    // Always increment sleep token to wake up any pending FutexWait
+    // This is safe even if worker is not sleeping - it will just return from FutexWait
+    sleep_token_.fetch_add(1, std::memory_order_release);
+    platform::FutexWake(&sleep_token_, 1);
 }
 
 int Worker::YieldCurrent() {

@@ -50,6 +50,7 @@ public:
     WorkStealingQueue& local_queue() { return local_queue_; }
     const WorkStealingQueue& local_queue() const { return local_queue_; }
     platform::ThreadId thread() const { return thread_; }
+    void set_thread(platform::ThreadId tid) { thread_ = tid; }
 
     // Get current worker (thread-local)
     static Worker* Current();

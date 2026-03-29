@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "Bash(find /g/bthread -type f -name *.md -o -name *.cpp -o -name *.h)",
-      "Bash(\"/c/Program Files/Microsoft Visual Studio/2022/Community/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe\" --version)"
+      "Bash(\"/c/Program Files/Microsoft Visual Studio/2022/Community/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe\" --version)",
+      "Bash",
+      "WebSearch",
+      "WebFetch(domain:brpc.apache.org)"
     ]
   }
 }

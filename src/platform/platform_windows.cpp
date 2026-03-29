@@ -1,3 +1,10 @@
+// Define target architecture for Windows headers
+#if defined(_M_X64) || defined(__x86_64__)
+#define _AMD64_
+#elif defined(_M_IX86) || defined(__i386__)
+#define _X86_
+#endif
+
 #include "bthread/platform/platform_windows.h"
 #include "bthread/platform/platform.h"
 
@@ -5,6 +12,8 @@
 #include <excpt.h>
 #include <processthreadsapi.h>
 #include <synchapi.h>
+#include <cstdio>
+#include <cstdlib>
 
 namespace bthread {
 namespace platform {
@@ -12,8 +21,8 @@ namespace platform {
 // Stack overflow handling
 LONG WINAPI StackOverflowHandler(EXCEPTION_POINTERS* info) {
     if (info->ExceptionRecord->ExceptionCode == EXCEPTION_STACK_OVERFLOW) {
-        fprintf(stderr, "Fatal: Stack overflow detected\n");
-        _Exit(1);
+        std::fprintf(stderr, "Fatal: Stack overflow detected\n");
+        std::_Exit(1);
     }
     return EXCEPTION_CONTINUE_SEARCH;
 }
@@ -60,7 +69,7 @@ struct ThreadStartData {
     void* arg;
 };
 
-static DWORD WINAPI ThreadWrapper(LPVOID arg) {
+static DWORD WINAPI BthreadThreadWrapper(LPVOID arg) {
     auto* data = static_cast<ThreadStartData*>(arg);
     data->fn(data->arg);
     delete data;
@@ -70,7 +79,7 @@ static DWORD WINAPI ThreadWrapper(LPVOID arg) {
 ThreadId CreateThread(ThreadFunc fn, void* arg) {
     auto* data = new ThreadStartData{fn, arg};
 
-    HANDLE thread = CreateThread(nullptr, 0, ThreadWrapper, data, 0, nullptr);
+    HANDLE thread = ::CreateThread(nullptr, 0, BthreadThreadWrapper, data, 0, nullptr);
     if (!thread) {
         delete data;
         return nullptr;
@@ -89,7 +98,7 @@ int FutexWait(std::atomic<int>* addr, int expected, const timespec* timeout) {
     DWORD ms = timeout ?
         static_cast<DWORD>(timeout->tv_sec * 1000 + timeout->tv_nsec / 1000000) : INFINITE;
 
-    BOOL ok = WaitOnAddress(static_cast<volatile VOID*>(addr),
+    BOOL ok = WaitOnAddress(static_cast<VOID*>(addr),
                             &expected, sizeof(int), ms);
 
     if (!ok) {
@@ -101,9 +110,9 @@ int FutexWait(std::atomic<int>* addr, int expected, const timespec* timeout) {
 
 int FutexWake(std::atomic<int>* addr, int count) {
     if (count == 1) {
-        WakeByAddressSingle(static_cast<volatile VOID*>(addr));
+        WakeByAddressSingle(static_cast<VOID*>(addr));
     } else {
-        WakeByAddressAll(static_cast<volatile VOID*>(addr));
+        WakeByAddressAll(static_cast<VOID*>(addr));
     }
     return 0;
 }

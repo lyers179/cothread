@@ -8,7 +8,7 @@
 
 namespace bthread {
 
-Scheduler::Scheduler() : task_group_(GetTaskGroup()) {}
+Scheduler::Scheduler() {}
 
 Scheduler::~Scheduler() {
     Shutdown();
@@ -30,10 +30,13 @@ void Scheduler::Init() {
             if (n == 0) n = 4;
         }
 
-        StartWorkers(n);
-        task_group_.set_worker_count(n);
-        initialized_.store(true, std::memory_order_release);
+        // Set running flag BEFORE starting workers to prevent race condition
+        // Workers check running() in their loop and would exit immediately if false
         running_.store(true, std::memory_order_release);
+
+        StartWorkers(n);
+        GetTaskGroup().set_worker_count(n);
+        initialized_.store(true, std::memory_order_release);
     });
 }
 
@@ -60,9 +63,9 @@ void Scheduler::StartWorkers(int count) {
     workers_.reserve(count);
     for (int i = 0; i < count; ++i) {
         Worker* w = new Worker(i);
-        w->thread = platform::CreateThread([](void* arg) {
+        w->set_thread(platform::CreateThread([](void* arg) {
             static_cast<Worker*>(arg)->Run();
-        }, w);
+        }, w));
         workers_.push_back(w);
     }
     worker_count_.store(count, std::memory_order_release);
@@ -91,7 +94,8 @@ void Scheduler::EnqueueTask(TaskMeta* task) {
     } else {
         // Not in a worker thread, push to global queue
         global_queue().Push(task);
-        WakeIdleWorkers(1);
+        // Wake up all idle workers to ensure tasks are processed
+        WakeIdleWorkers(worker_count_.load(std::memory_order_acquire));
     }
 }
 

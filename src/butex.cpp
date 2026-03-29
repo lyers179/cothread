@@ -1,11 +1,13 @@
 #include "bthread/butex.h"
 #include "bthread/worker.h"
 #include "bthread/scheduler.h"
+#include "bthread/timer_thread.h"
 #include "bthread/platform/platform.h"
 
 #include <cstring>
 
-namespace bthread {
+using namespace bthread;
+using namespace bthread::platform;
 
 Butex::Butex() = default;
 Butex::~Butex() = default;
@@ -110,6 +112,11 @@ int Butex::Wait(int expected_value, const platform::timespec* timeout) {
 }
 
 void Butex::Wake(int count) {
+    // First, change the value to wake up futex waiters
+    // This is needed for pthreads waiting via FutexWait
+    value_.store(1, std::memory_order_release);
+    platform::FutexWake(&value_, count);
+
     int woken = 0;
 
     while (woken < count) {
@@ -142,5 +149,3 @@ void Butex::Wake(int count) {
         }
     }
 }
-
-} // namespace bthread

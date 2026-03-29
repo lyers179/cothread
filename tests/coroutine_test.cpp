@@ -1,8 +1,12 @@
 // tests/coroutine_test.cpp
 #include "coro/result.h"
 #include "coro/frame_pool.h"
+#include "coro/meta.h"
 #include <cassert>
 #include <iostream>
+#include <thread>
+#include <vector>
+#include <algorithm>
 
 void test_error_basic() {
     coro::Error err(1, "test error");
@@ -152,6 +156,97 @@ void test_frame_pool_boundary() {
     std::cout << "test_frame_pool_boundary PASSED\n";
 }
 
+void test_coroutine_queue_basic() {
+    coro::CoroutineQueue queue;
+    assert(queue.Empty());
+
+    coro::CoroutineMeta meta1;
+    queue.Push(&meta1);
+    assert(!queue.Empty());
+
+    coro::CoroutineMeta* popped = queue.Pop();
+    assert(popped == &meta1);
+    assert(queue.Empty());
+
+    std::cout << "test_coroutine_queue_basic PASSED\n";
+}
+
+void test_coroutine_queue_multi() {
+    coro::CoroutineQueue queue;
+
+    coro::CoroutineMeta meta1, meta2, meta3;
+    queue.Push(&meta1);
+    queue.Push(&meta2);
+    queue.Push(&meta3);
+
+    // Pop in order
+    assert(queue.Pop() == &meta1);
+    assert(queue.Pop() == &meta2);
+    assert(queue.Pop() == &meta3);
+    assert(queue.Empty());
+
+    std::cout << "test_coroutine_queue_multi PASSED\n";
+}
+
+void test_coroutine_meta_state() {
+    coro::CoroutineMeta meta;
+    assert(meta.state.load() == coro::CoroutineMeta::READY);
+    assert(meta.owner_worker == nullptr);
+    assert(meta.cancel_requested.load() == false);
+    assert(meta.waiting_sync == nullptr);
+    assert(meta.next.load() == nullptr);
+    assert(meta.slot_index == 0);
+    assert(meta.generation == 0);
+
+    // Test state transitions (atomic operations)
+    meta.state.store(coro::CoroutineMeta::RUNNING);
+    assert(meta.state.load() == coro::CoroutineMeta::RUNNING);
+
+    meta.state.store(coro::CoroutineMeta::SUSPENDED);
+    assert(meta.state.load() == coro::CoroutineMeta::SUSPENDED);
+
+    meta.state.store(coro::CoroutineMeta::FINISHED);
+    assert(meta.state.load() == coro::CoroutineMeta::FINISHED);
+
+    std::cout << "test_coroutine_meta_state PASSED\n";
+}
+
+void test_coroutine_queue_multithreaded() {
+    // Multi-producer single-consumer test
+    coro::CoroutineQueue queue;
+    constexpr int NUM_PRODUCERS = 4;
+    constexpr int ITEMS_PER_PRODUCER = 100;
+
+    std::vector<coro::CoroutineMeta> metas(NUM_PRODUCERS * ITEMS_PER_PRODUCER);
+
+    // Producers push items from multiple threads
+    std::vector<std::thread> producers;
+    for (int p = 0; p < NUM_PRODUCERS; ++p) {
+        producers.emplace_back([&queue, &metas, p]() {
+            for (int i = 0; i < ITEMS_PER_PRODUCER; ++i) {
+                int idx = p * ITEMS_PER_PRODUCER + i;
+                queue.Push(&metas[idx]);
+            }
+        });
+    }
+
+    // Wait for all producers
+    for (auto& t : producers) {
+        t.join();
+    }
+
+    // Consumer pops all items (single consumer thread)
+    int count = 0;
+    while (!queue.Empty()) {
+        coro::CoroutineMeta* meta = queue.Pop();
+        assert(meta != nullptr);
+        ++count;
+    }
+
+    assert(count == NUM_PRODUCERS * ITEMS_PER_PRODUCER);
+    std::cout << "test_coroutine_queue_multithreaded PASSED\n";
+}
+
 int main() {
     test_error_basic();
     test_result_value();
@@ -166,6 +261,10 @@ int main() {
     test_frame_pool_size_limit();
     test_frame_pool_uninitialized();
     test_frame_pool_boundary();
+    test_coroutine_queue_basic();
+    test_coroutine_queue_multi();
+    test_coroutine_meta_state();
+    test_coroutine_queue_multithreaded();
 
     std::cout << "All tests PASSED!\n";
     return 0;

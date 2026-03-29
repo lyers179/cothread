@@ -1,11 +1,10 @@
 #include "bthread.h"
 #include "bthread/mutex.h"
+#include "bthread/platform/platform.h"
 
 #include <cstdio>
 #include <cassert>
 #include <thread>
-
-using namespace bthread;
 
 int main() {
     printf("Testing Mutex...\n");
@@ -33,7 +32,7 @@ int main() {
     assert(ret == 0);
 
     ret = bthread_mutex_trylock(&m2);
-    assert(ret == EBUSY);
+    assert(ret == bthread::platform::EBUSY);
 
     bthread_mutex_unlock(&m2);
 

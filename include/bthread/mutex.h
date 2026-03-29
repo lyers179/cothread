@@ -9,13 +9,14 @@ extern "C" {
 #endif
 
 struct bthread_mutex_t {
-    void* butex;
 #ifdef __cplusplus
+    std::atomic<void*> butex{nullptr};
     std::atomic<uint64_t> owner{0};
 #else
+    _Atomic void* butex;
     _Atomic uint64_t owner;
 #endif
-    void* pthread_mutex;
+    void* native_mutex;  // Platform-specific mutex (pthread_mutex_t or SRWLOCK)
 };
 
 int bthread_mutex_init(bthread_mutex_t* mutex, const void* attr);

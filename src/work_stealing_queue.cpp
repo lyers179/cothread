@@ -37,7 +37,9 @@ TaskMeta* WorkStealingQueue::Pop() {
         if (head_.compare_exchange_strong(expected,
                 MakeVal(ExtractVersion(h) + 1, (idx + 1) % CAPACITY),
                 std::memory_order_acq_rel, std::memory_order_acquire)) {
-            tail_.store(MakeVal(ExtractVersion(t) + 1, idx), std::memory_order_release);
+            // Set tail to match head (both point to next available slot)
+            tail_.store(MakeVal(ExtractVersion(t) + 1, (idx + 1) % CAPACITY),
+                        std::memory_order_release);
             return task;
         }
         return nullptr;
