@@ -75,6 +75,7 @@ set(CORO_SOURCES
     src/coro/coroutine.cpp
     src/coro/scheduler.cpp
     src/coro/mutex.cpp
+    src/coro/cond.cpp
 )
 
 add_library(coro STATIC ${CORO_SOURCES})

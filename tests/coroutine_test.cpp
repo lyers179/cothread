@@ -5,6 +5,7 @@
 #include "coro/coroutine.h"
 #include "coro/scheduler.h"
 #include "coro/mutex.h"
+#include "coro/cond.h"
 #include <cassert>
 #include <iostream>
 #include <thread>
@@ -767,6 +768,217 @@ void test_comutex_with_value() {
     std::cout << "test_comutex_with_value PASSED\n";
 }
 
+// === CoCond tests ===
+
+coro::Task<void> producer(coro::CoMutex& m, coro::CoCond& c, int& data) {
+    co_await m.lock();
+    data = 42;
+    c.signal();
+    m.unlock();
+}
+
+coro::Task<void> consumer(coro::CoMutex& m, coro::CoCond& c, int& data) {
+    co_await m.lock();
+    while (data == 0) {
+        co_await c.wait(m);
+    }
+    assert(data == 42);
+    m.unlock();
+}
+
+void test_cocond_basic() {
+    coro::CoMutex mutex;
+    coro::CoCond cond;
+    int data = 0;
+
+    auto c = coro::co_spawn(consumer(mutex, cond, data));
+    auto p = coro::co_spawn(producer(mutex, cond, data));
+
+    while (!c.is_done() || !p.is_done()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    c.get();  // Complete without exception
+    p.get();  // Complete without exception
+    assert(data == 42);
+    std::cout << "test_cocond_basic PASSED\n";
+}
+
+coro::Task<void> broadcaster(coro::CoMutex& m, coro::CoCond& c, std::atomic<int>& ready_count) {
+    co_await m.lock();
+    // Wait until all consumers are ready
+    while (ready_count.load() < 3) {
+        co_await c.wait(m);
+    }
+    // Broadcast to wake all waiting consumers
+    c.broadcast();
+    m.unlock();
+}
+
+coro::Task<void> consumer_for_broadcast(coro::CoMutex& m, coro::CoCond& c, std::atomic<int>& ready_count, int& data) {
+    co_await m.lock();
+    ready_count.fetch_add(1);
+    c.signal();  // Signal that we're ready
+    co_await c.wait(m);  // Wait for broadcast
+    data++;  // Increment after broadcast wakes us
+    m.unlock();
+}
+
+void test_cocond_broadcast() {
+    coro::CoMutex mutex;
+    coro::CoCond cond;
+    std::atomic<int> ready_count{0};
+    int data = 0;
+
+    auto b = coro::co_spawn(broadcaster(mutex, cond, ready_count));
+    auto c1 = coro::co_spawn(consumer_for_broadcast(mutex, cond, ready_count, data));
+    auto c2 = coro::co_spawn(consumer_for_broadcast(mutex, cond, ready_count, data));
+    auto c3 = coro::co_spawn(consumer_for_broadcast(mutex, cond, ready_count, data));
+
+    while (!b.is_done() || !c1.is_done() || !c2.is_done() || !c3.is_done()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    b.get();
+    c1.get();
+    c2.get();
+    c3.get();
+    assert(data == 3);  // All consumers should have incremented
+    std::cout << "test_cocond_broadcast PASSED\n";
+}
+
+coro::Task<void> multi_producer(coro::CoMutex& m, coro::CoCond& c, int& data, int id) {
+    co_await m.lock();
+    data += id;
+    c.signal();  // Signal after each production
+    m.unlock();
+}
+
+coro::Task<void> multi_consumer(coro::CoMutex& m, coro::CoCond& c, int& data, int expected_sum) {
+    co_await m.lock();
+    while (data < expected_sum) {
+        co_await c.wait(m);
+    }
+    m.unlock();
+}
+
+void test_cocond_multiple_signal() {
+    coro::CoMutex mutex;
+    coro::CoCond cond;
+    int data = 0;
+    int expected_sum = 10 + 20 + 30;  // Sum of producer IDs
+
+    auto consumer_task = coro::co_spawn(multi_consumer(mutex, cond, data, expected_sum));
+    auto p1 = coro::co_spawn(multi_producer(mutex, cond, data, 10));
+    auto p2 = coro::co_spawn(multi_producer(mutex, cond, data, 20));
+    auto p3 = coro::co_spawn(multi_producer(mutex, cond, data, 30));
+
+    while (!consumer_task.is_done() || !p1.is_done() || !p2.is_done() || !p3.is_done()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    consumer_task.get();
+    p1.get();
+    p2.get();
+    p3.get();
+    assert(data == expected_sum);
+    std::cout << "test_cocond_multiple_signal PASSED\n";
+}
+
+coro::Task<void> signal_no_waiter_coro(coro::CoCond& c) {
+    c.signal();  // Signal when no one is waiting - should be safe
+    co_return;
+}
+
+void test_cocond_signal_no_waiter() {
+    coro::CoCond cond;
+
+    auto task = coro::co_spawn(signal_no_waiter_coro(cond));
+
+    while (!task.is_done()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    task.get();  // Should complete without exception
+    std::cout << "test_cocond_signal_no_waiter PASSED\n";
+}
+
+coro::Task<void> broadcast_no_waiter_coro(coro::CoCond& c) {
+    c.broadcast();  // Broadcast when no one is waiting - should be safe
+    co_return;
+}
+
+void test_cocond_broadcast_no_waiter() {
+    coro::CoCond cond;
+
+    auto task = coro::co_spawn(broadcast_no_waiter_coro(cond));
+
+    while (!task.is_done()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    task.get();  // Should complete without exception
+    std::cout << "test_cocond_broadcast_no_waiter PASSED\n";
+}
+
+// Test for concurrent signal() from multiple threads
+coro::Task<void> concurrent_signal_producer(coro::CoMutex& m, coro::CoCond& c, std::atomic<int>& counter) {
+    co_await m.lock();
+    counter.fetch_add(1);
+    c.signal();
+    m.unlock();
+}
+
+void test_cocond_concurrent_signal() {
+    // Test that concurrent signal() calls from multiple threads are safe
+    // and don't cause data races or crashes.
+    // This is a stress test rather than a functional test - we just verify
+    // that the implementation handles concurrent calls correctly.
+    coro::CoMutex mutex;
+    coro::CoCond cond;
+    std::atomic<int> counter{0};
+    constexpr int NUM_PRODUCERS = 8;
+
+    // Spawn all producers from different OS threads concurrently
+    std::vector<std::thread> producer_threads;
+    std::atomic<int> ready_count{0};
+    std::atomic<bool> go{false};
+
+    for (int i = 0; i < NUM_PRODUCERS; ++i) {
+        producer_threads.emplace_back([&mutex, &cond, &counter, &ready_count, &go]() {
+            // Synchronize all threads to start at the same time
+            ready_count.fetch_add(1);
+            while (!go.load()) {
+                std::this_thread::yield();
+            }
+            // Spawn producer coroutine
+            auto task = coro::co_spawn(concurrent_signal_producer(mutex, cond, counter));
+            // Wait for completion
+            while (!task.is_done()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            task.get();
+        });
+    }
+
+    // Wait for all threads to be ready
+    while (ready_count.load() < NUM_PRODUCERS) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    // Signal all threads to start simultaneously
+    go.store(true);
+
+    // Wait for all producer threads to complete
+    for (auto& t : producer_threads) {
+        t.join();
+    }
+
+    // Verify all producers completed successfully
+    assert(counter.load() == NUM_PRODUCERS);
+    std::cout << "test_cocond_concurrent_signal PASSED\n";
+}
+
 // === Auto-initialization test ===
 // This test must run FIRST before any other scheduler tests
 
@@ -832,6 +1044,14 @@ int main() {
     test_comutex_contention();
     test_comutex_nested_locks();
     test_comutex_with_value();
+
+    // Run CoCond tests (scheduler is still running)
+    test_cocond_basic();
+    test_cocond_broadcast();
+    test_cocond_multiple_signal();
+    test_cocond_signal_no_waiter();
+    test_cocond_broadcast_no_waiter();
+    test_cocond_concurrent_signal();
 
     // Final shutdown
     coro::CoroutineScheduler::Instance().Shutdown();
