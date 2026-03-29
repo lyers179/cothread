@@ -26,6 +26,15 @@ Implement a C++20 coroutine-based M:N thread pool for general-purpose task sched
 
 ## Architecture
 
+### Phase 1 Approach (This Implementation)
+
+**Note:** Phase 1 uses dedicated coroutine worker threads for simplicity, rather than integrating with bthread's Worker pool. This approach:
+- Simplifies initial implementation
+- Avoides complex coordination between bthread tasks and coroutines
+- Maintains independent scheduler for coroutines
+
+Future phases may integrate with bthread's Worker pool for unified scheduling.
+
 ### Layer Structure
 
 ```
@@ -55,9 +64,9 @@ Implement a C++20 coroutine-based M:N thread pool for general-purpose task sched
 
 ### Relationship with bthread
 
-- **Reuse:** Worker pool, WorkStealingQueue, GlobalQueue infrastructure
-- **Independent:** CoroutineMeta (separate from TaskMeta), frame allocation logic, coroutine-specific sync primitives
-- Workers execute both bthread tasks and coroutines, differentiated by task type flag
+- **Phase 1 (this implementation):** Dedicated coroutine workers, independent from bthread's Worker pool
+- **Future integration:** May reuse Worker pool, WorkStealingQueue, GlobalQueue infrastructure
+- CoroutineMeta is separate from TaskMeta, with its own scheduling logic
 
 ## Detailed Design
 
@@ -82,7 +91,8 @@ struct CoroutineMeta {
 
 Pre-allocate fixed-size memory blocks for coroutine frames:
 
-- Two size tiers: 4KB (small coroutines), 8KB (larger coroutines)
+- **Phase 1:** Single 8KB block size (sufficient for most coroutines)
+- **Future:** Two size tiers: 4KB (small coroutines), 8KB (larger coroutines)
 - Pool managed as thread-safe free lists
 - Custom `promise_type::operator new` delegates to pool
 - On coroutine completion, frame memory returned to pool
@@ -266,7 +276,7 @@ Tests will cover:
 1. Basic coroutine creation and completion
 2. `co_await` Task/SafeTask results
 3. Error handling (exception vs Result)
-4. Work stealing across Workers
+4. ~~Work stealing across Workers~~ (Phase 2 - deferred)
 5. CoMutex contention
 6. CoCond wait/signal
 7. Cancellation flow
