@@ -9,6 +9,11 @@ set(TEST_SOURCES
     mutex_test.cpp
     cond_test.cpp
     timer_test.cpp
+    context_test.cpp
+    scheduler_test.cpp
+    wake_test.cpp
+    debug_test.cpp
+    multi_test.cpp
     bthread_test.cpp
     stress_test.cpp
 )
@@ -19,3 +24,8 @@ foreach(test_source ${TEST_SOURCES})
     target_link_libraries(${test_name} PRIVATE bthread)
     add_test(NAME ${test_name} COMMAND ${test_name})
 endforeach()
+
+# Coroutine test (requires C++20)
+add_executable(coroutine_test coroutine_test.cpp)
+target_link_libraries(coroutine_test PRIVATE coro)
+add_test(NAME coroutine_test COMMAND coroutine_test)

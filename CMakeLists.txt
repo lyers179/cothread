@@ -1,11 +1,12 @@
 cmake_minimum_required(VERSION 3.15)
-project(bthread VERSION 1.0.0 LANGUAGES CXX ASM)
+project(bthread VERSION 1.0.0 LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Platform detection
 if(WIN32)
+    enable_language(ASM_MASM)
     set(PLATFORM_SOURCES src/platform/platform_windows.cpp src/platform/context_windows_x64.asm)
     set(PLATFORM_HEADERS include/bthread/platform/platform_windows.h)
     set(PLATFORM_DEFINES BTHREAD_PLATFORM_WINDOWS)
@@ -63,11 +64,21 @@ target_compile_definitions(bthread PUBLIC ${PLATFORM_DEFINES})
 
 # Link libraries
 if(WIN32)
-    target_link_libraries(bthread PRIVATE)
+    target_link_libraries(bthread PRIVATE synchronization)
 else()
     target_link_libraries(bthread PRIVATE pthread)
 endif()
 
+# Coro library - C++20 coroutine support
+add_library(coro INTERFACE)
+target_include_directories(coro INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
 # Tests
 enable_testing()
 add_subdirectory(tests)
+
+# Demo
+add_subdirectory(demo)
+
+# Benchmark
+add_subdirectory(benchmark)
