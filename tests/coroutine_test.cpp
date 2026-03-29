@@ -3,6 +3,7 @@
 #include "coro/frame_pool.h"
 #include "coro/meta.h"
 #include "coro/coroutine.h"
+#include "coro/scheduler.h"
 #include <cassert>
 #include <iostream>
 #include <thread>
@@ -511,6 +512,154 @@ void test_task_void_get_on_moved_from_throws() {
     std::cout << "test_task_void_get_on_moved_from_throws PASSED\n";
 }
 
+// === Scheduler tests ===
+
+coro::Task<int> spawn_test_coro() {
+    co_return 100;
+}
+
+void test_scheduler_spawn_and_wait() {
+    auto task = coro::co_spawn(spawn_test_coro());
+
+    // Wait for completion (polling)
+    while (!task.is_done()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    assert(task.get() == 100);
+    std::cout << "test_scheduler_spawn_and_wait PASSED\n";
+}
+
+coro::Task<int> multi_spawn_coro(int value) {
+    co_return value * 2;
+}
+
+void test_scheduler_multi_spawn() {
+    auto t1 = coro::co_spawn(multi_spawn_coro(10));
+    auto t2 = coro::co_spawn(multi_spawn_coro(20));
+    auto t3 = coro::co_spawn(multi_spawn_coro(30));
+
+    // Wait for all to complete
+    while (!t1.is_done() || !t2.is_done() || !t3.is_done()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    assert(t1.get() == 20);
+    assert(t2.get() == 40);
+    assert(t3.get() == 60);
+    std::cout << "test_scheduler_multi_spawn PASSED\n";
+}
+
+coro::Task<void> void_spawn_coro(int& counter) {
+    counter++;
+    co_return;
+}
+
+void test_scheduler_void_task() {
+    int counter = 0;
+    auto task = coro::co_spawn(void_spawn_coro(counter));
+
+    while (!task.is_done()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    task.get();  // Should complete without exception
+    assert(counter == 1);
+    std::cout << "test_scheduler_void_task PASSED\n";
+}
+
+// === Concurrent spawn test ===
+
+coro::Task<int> concurrent_spawn_coro(int id, int delay_ms) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
+    co_return id * 2;
+}
+
+void test_scheduler_concurrent_spawns() {
+    constexpr int NUM_THREADS = 4;
+    constexpr int TASKS_PER_THREAD = 10;
+    std::vector<std::thread> threads;
+    std::vector<std::vector<coro::Task<int>>> all_tasks(NUM_THREADS);
+
+    // Spawn tasks from multiple threads concurrently
+    for (int t = 0; t < NUM_THREADS; ++t) {
+        threads.emplace_back([&all_tasks, t]() {
+            for (int i = 0; i < TASKS_PER_THREAD; ++i) {
+                all_tasks[t].push_back(coro::co_spawn(concurrent_spawn_coro(t * 100 + i, 5)));
+            }
+        });
+    }
+
+    // Wait for all spawn threads to complete
+    for (auto& t : threads) {
+        t.join();
+    }
+
+    // Wait for all tasks to complete and verify results
+    int total_completed = 0;
+    for (int t = 0; t < NUM_THREADS; ++t) {
+        for (int i = 0; i < TASKS_PER_THREAD; ++i) {
+            while (!all_tasks[t][i].is_done()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+            int expected = (t * 100 + i) * 2;
+            assert(all_tasks[t][i].get() == expected);
+            ++total_completed;
+        }
+    }
+
+    assert(total_completed == NUM_THREADS * TASKS_PER_THREAD);
+    std::cout << "test_scheduler_concurrent_spawns PASSED\n";
+}
+
+// === Exception handling test ===
+
+coro::Task<int> throwing_coro(int value) {
+    if (value < 0) {
+        throw std::runtime_error("negative value not allowed");
+    }
+    co_return value * 2;
+}
+
+void test_scheduler_exception_in_coroutine() {
+    // Test that a throwing coroutine doesn't crash the scheduler
+    auto throwing_task = coro::co_spawn(throwing_coro(-1));
+    auto normal_task = coro::co_spawn(throwing_coro(10));
+
+    // Wait for both tasks to complete (the throwing one should be handled)
+    int max_wait = 100;  // max 1 second
+    while ((!throwing_task.is_done() || !normal_task.is_done()) && max_wait > 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        --max_wait;
+    }
+
+    // The normal task should complete successfully
+    assert(normal_task.is_done());
+    assert(normal_task.get() == 20);
+
+    // The throwing task should also be marked as done (even though it threw)
+    // Note: The exception is caught by the worker thread and logged,
+    // and the task is cleaned up. The result may be undefined or throw.
+    assert(throwing_task.is_done());
+
+    std::cout << "test_scheduler_exception_in_coroutine PASSED\n";
+}
+
+// === Auto-initialization test ===
+// This test must run FIRST before any other scheduler tests
+
+void test_scheduler_auto_init() {
+    // Spawn without explicit Init() - should auto-initialize
+    auto task = coro::co_spawn(simple_coro());
+
+    while (!task.is_done()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    assert(task.get() == 42);
+    std::cout << "test_scheduler_auto_init PASSED\n";
+}
+
 int main() {
     test_error_basic();
     test_result_value();
@@ -543,6 +692,20 @@ int main() {
     test_task_get_on_moved_from_throws();
     test_task_void_get_on_incomplete_throws();
     test_task_void_get_on_moved_from_throws();
+
+    // Auto-init test must run FIRST before explicit Init()
+    // Note: Init() is called automatically by first Spawn()
+    test_scheduler_auto_init();
+
+    // Now the scheduler is initialized, run remaining scheduler tests
+    test_scheduler_spawn_and_wait();
+    test_scheduler_multi_spawn();
+    test_scheduler_void_task();
+    test_scheduler_concurrent_spawns();
+    test_scheduler_exception_in_coroutine();
+
+    // Shutdown scheduler after all tests
+    coro::CoroutineScheduler::Instance().Shutdown();
 
     std::cout << "All tests PASSED!\n";
     return 0;

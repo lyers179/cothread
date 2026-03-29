@@ -73,6 +73,7 @@ endif()
 set(CORO_SOURCES
     src/coro/frame_pool.cpp
     src/coro/coroutine.cpp
+    src/coro/scheduler.cpp
 )
 
 add_library(coro STATIC ${CORO_SOURCES})

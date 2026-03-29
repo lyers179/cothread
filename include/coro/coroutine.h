@@ -62,10 +62,14 @@ public:
 
     void set_awaiter(std::coroutine_handle<> h) { awaiter_ = h; }
 
+    void set_meta(CoroutineMeta* m) { meta_ = m; }
+    CoroutineMeta* meta() const { return meta_; }
+
 private:
     T result_{};
     std::exception_ptr exception_;
     std::coroutine_handle<> awaiter_;
+    CoroutineMeta* meta_{nullptr};
 };
 
 // Task<T> - exception-based coroutine return type (primary template)
@@ -128,9 +132,13 @@ public:
     void get_result() { if (exception_) std::rethrow_exception(exception_); }
     void set_awaiter(std::coroutine_handle<> h) { awaiter_ = h; }
 
+    void set_meta(CoroutineMeta* m) { meta_ = m; }
+    CoroutineMeta* meta() const { return meta_; }
+
 private:
     std::exception_ptr exception_;
     std::coroutine_handle<> awaiter_;
+    CoroutineMeta* meta_{nullptr};
 };
 
 // Task<void> - specialization for void
