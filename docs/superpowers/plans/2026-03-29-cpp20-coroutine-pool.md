@@ -4,7 +4,7 @@
 
 **Goal:** Implement a C++20 coroutine-based M:N thread pool for general-purpose task scheduling.
 
-**Architecture:** Layered design with user API (Task<T>/SafeTask<T>) on top, CoroutineScheduler in middle, reusing bthread's Worker/WorkStealingQueue infrastructure at bottom.
+**Architecture:** Layered design with user API (Task<T>/SafeTask<T>) on top, CoroutineScheduler in middle. **Note:** Uses dedicated coroutine worker threads (not shared with bthread workers) for Phase 1 simplicity. Future versions may integrate with bthread's Worker pool.
 
 **Tech Stack:** C++20 coroutines, atomic operations, existing bthread infrastructure.
 
@@ -34,9 +34,7 @@
 - `coroutine_test.cpp` - All coroutine tests
 
 **Modify:**
-- `CMakeLists.txt` - Add coro sources
-- `include/bthread/worker.h` - Add coroutine execution support
-- `src/worker.cpp` - Add coroutine handling in Run()
+- `CMakeLists.txt` - Add coro sources, upgrade to C++20
 
 ---
 
@@ -358,10 +356,14 @@ void FramePool::Deallocate(void* block) {
 } // namespace coro
 ```
 
-- [ ] **Step 5: Update CMakeLists.txt**
+- [ ] **Step 5: Update CMakeLists.txt (upgrade to C++20)**
 
 ```cmake
 # Add to CMakeLists.txt after BTHREAD_SOURCES
+# Note: Upgrade project to C++20 for coroutine support
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 set(CORO_SOURCES
     src/coro/frame_pool.cpp
 )
@@ -369,7 +371,6 @@ set(CORO_SOURCES
 # Add coro library
 add_library(coro STATIC ${CORO_SOURCES})
 target_include_directories(coro PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_compile_features(coro PUBLIC cxx_std_20)
 ```
 
 - [ ] **Step 6: Run test to verify it passes**
@@ -823,8 +824,8 @@ cd g:/bthread && git add include/coro/coroutine.h src/coro/coroutine.cpp CMakeLi
 - Create: `include/coro/scheduler.h`
 - Create: `src/coro/scheduler.cpp`
 - Modify: `CMakeLists.txt`
-- Modify: `include/bthread/worker.h`
-- Modify: `src/worker.cpp`
+
+**Design Note:** This implementation uses dedicated coroutine worker threads rather than integrating with bthread's Worker pool. This simplifies Phase 1 and avoids complex coordination between bthread tasks and coroutines. The dedicated workers each run a loop that pops coroutines from a shared global queue.
 
 - [ ] **Step 1: Write failing test for scheduler spawn**
 
@@ -836,19 +837,28 @@ coro::Task<int> spawn_test_coro() {
     co_return 100;
 }
 
-void test_scheduler_spawn() {
+void test_scheduler_spawn_and_wait() {
     coro::CoroutineScheduler::Instance().Init();
 
     auto task = coro::co_spawn(spawn_test_coro());
-    int result = co_await task;  // Note: need coroutine context for this
 
-    // For non-coroutine context, use blocking get()
-    // We'll test blocking get for now
-    // This test needs adjustment based on scheduler integration
+    // Wait for completion (polling)
+    while (!task.is_done()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    assert(task.get() == 100);
+
+    coro::CoroutineScheduler::Instance().Shutdown();
 }
 ```
 
-- [ ] **Step 2: Create scheduler header**
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `cd g:/bthread && cmake --build build --target coroutine_test 2>&1 || echo "Build expected to fail"`
+Expected: Build fails with "coro/scheduler.h not found"
+
+- [ ] **Step 3: Create scheduler header**
 
 ```cpp
 // include/coro/scheduler.h
@@ -858,276 +868,17 @@ void test_scheduler_spawn() {
 #include <memory>
 #include <mutex>
 #include <vector>
-#include "coro/meta.h"
-#include "coro/coroutine.h"
-
-namespace bthread {
-    class Worker;
-    class Scheduler;
-}
-
-namespace coro {
-
-class CoroutineScheduler {
-public:
-    static CoroutineScheduler& Instance();
-
-    void Init();
-    void Shutdown();
-
-    bool running() const {
-        return running_.load(std::memory_order_acquire);
-    }
-
-    // Spawn a coroutine (returns Task<T>)
-    template<typename T>
-    Task<T> Spawn(Task<T> task) {
-        std::coroutine_handle<> h = task.handle();
-        CoroutineMeta* meta = AllocMeta();
-        meta->handle = h;
-        meta->state = CoroutineMeta::READY;
-
-        // Store meta in promise
-        // We need to extend TaskPromise to hold CoroutineMeta*
-
-        EnqueueCoroutine(meta);
-        return std::move(task);
-    }
-
-    // Enqueue a ready coroutine
-    void EnqueueCoroutine(CoroutineMeta* meta);
-
-    // Get coroutine meta pool
-    CoroutineMeta* AllocMeta();
-    void FreeMeta(CoroutineMeta* meta);
-
-private:
-    CoroutineScheduler() = default;
-    ~CoroutineScheduler() = default;
-
-    std::atomic<bool> running_{false};
-    std::atomic<bool> initialized_{false};
-    std::once_flag init_once_;
-
-    // CoroutineMeta pool
-    std::vector<CoroutineMeta*> meta_pool_;
-    std::mutex meta_mutex_;
-
-    void InitMetaPool(size_t count);
-};
-
-// co_spawn function
-template<typename T>
-Task<T> co_spawn(Task<T> task) {
-    CoroutineScheduler::Instance().Spawn(std::move(task));
-    return std::move(task);
-}
-
-} // namespace coro
-```
-
-- [ ] **Step 3: Create scheduler implementation**
-
-```cpp
-// src/coro/scheduler.cpp
-#include "coro/scheduler.h"
-#include "bthread/scheduler.h"
-#include "bthread/worker.h"
-#include "bthread/global_queue.h"
-#include <cstdlib>
-
-namespace coro {
-
-CoroutineScheduler& CoroutineScheduler::Instance() {
-    static CoroutineScheduler instance;
-    return instance;
-}
-
-void CoroutineScheduler::Init() {
-    std::call_once(init_once_, [this] {
-        InitMetaPool(256);
-        running_.store(true, std::memory_order_release);
-        initialized_.store(true, std::memory_order_release);
-    });
-}
-
-void CoroutineScheduler::Shutdown() {
-    running_.store(false, std::memory_order_release);
-}
-
-void CoroutineScheduler::InitMetaPool(size_t count) {
-    std::lock_guard<std::mutex> lock(meta_mutex_);
-    for (size_t i = 0; i < count; ++i) {
-        CoroutineMeta* meta = new CoroutineMeta();
-        meta_pool_.push_back(meta);
-    }
-}
-
-CoroutineMeta* CoroutineScheduler::AllocMeta() {
-    std::lock_guard<std::mutex> lock(meta_mutex_);
-    for (CoroutineMeta* meta : meta_pool_) {
-        if (meta->state == CoroutineMeta::FINISHED ||
-            meta->handle == nullptr) {
-            // Reset meta
-            meta->state = CoroutineMeta::READY;
-            meta->cancel_requested.store(false, std::memory_order_relaxed);
-            meta->waiting_sync = nullptr;
-            meta->next = nullptr;
-            meta->owner_worker = nullptr;
-            return meta;
-        }
-    }
-    // Expand pool
-    CoroutineMeta* meta = new CoroutineMeta();
-    meta_pool_.push_back(meta);
-    return meta;
-}
-
-void CoroutineScheduler::FreeMeta(CoroutineMeta* meta) {
-    // Don't actually free, just mark as available
-    meta->state = CoroutineMeta::FINISHED;
-    meta->handle = nullptr;
-}
-
-void CoroutineScheduler::EnqueueCoroutine(CoroutineMeta* meta) {
-    // Use bthread's GlobalQueue by wrapping CoroutineMeta as TaskMeta-like
-    // For now, we'll need to extend Worker to handle coroutines
-
-    // Simple approach: push to a global coroutine queue
-    // Worker will check this queue
-
-    bthread::Worker* w = bthread::Worker::Current();
-    if (w) {
-        // Push to worker's local queue (but it expects TaskMeta*)
-        // We need a different approach...
-    }
-
-    // For initial implementation, use a separate coroutine global queue
-    // This will be a static variable for simplicity
-    static CoroutineQueue global_coro_queue;
-    global_coro_queue.Push(meta);
-
-    // Wake a worker
-    bthread::Scheduler::Instance().WakeIdleWorkers(1);
-}
-
-} // namespace coro
-```
-
-- [ ] **Step 4: Extend Worker for coroutine support**
-
-Modify `include/bthread/worker.h` - add method:
-```cpp
-// Add to Worker class public section
-coro::CoroutineMeta* PickCoroutine();
-void RunCoroutine(coro::CoroutineMeta* meta);
-```
-
-Modify `src/worker.cpp` - add implementation:
-```cpp
-// Add includes
-#include "coro/scheduler.h"
-#include "coro/meta.h"
-
-// Add to Worker::Run() after TaskMeta handling:
-coro::CoroutineMeta* coro = PickCoroutine();
-if (coro) {
-    RunCoroutine(coro);
-    continue;
-}
-
-// Add new methods:
-coro::CoroutineMeta* Worker::PickCoroutine() {
-    static coro::CoroutineQueue& queue = /* get from scheduler */;
-    return queue.Pop();
-}
-
-void Worker::RunCoroutine(coro::CoroutineMeta* meta) {
-    current_coro_ = meta;  // Add member
-    meta->state = coro::CoroutineMeta::RUNNING;
-    meta->owner_worker = this;
-    meta->handle.resume();
-
-    // Handle after resume
-    if (meta->state == coro::CoroutineMeta::FINISHED) {
-        coro::CoroutineScheduler::Instance().FreeMeta(meta);
-    }
-    current_coro_ = nullptr;
-}
-```
-
-- [ ] **Step 5: This step is complex - let's simplify**
-
-The Worker integration is complex. For Phase 1, use a simpler approach: **dedicated coroutine worker threads** instead of mixing with bthread Workers.
-
-Revised Step 3:
-```cpp
-// Simplified scheduler with dedicated workers
-// src/coro/scheduler.cpp
-#include "coro/scheduler.h"
-#include <thread>
-#include <vector>
-
-namespace coro {
-
-CoroutineScheduler& CoroutineScheduler::Instance() {
-    static CoroutineScheduler instance;
-    return instance;
-}
-
-void CoroutineScheduler::Init() {
-    std::call_once(init_once_, [this] {
-        InitMetaPool(256);
-        running_.store(true, std::memory_order_release);
-        StartCoroutineWorkers(4);  // 4 coroutine workers
-        initialized_.store(true, std::memory_order_release);
-    });
-}
-
-void CoroutineScheduler::StartCoroutineWorkers(int count) {
-    for (int i = 0; i < count; ++i) {
-        workers_.emplace_back([this] {
-            CoroutineWorkerLoop();
-        });
-    }
-}
-
-void CoroutineScheduler::CoroutineWorkerLoop() {
-    while (running_.load(std::memory_order_acquire)) {
-        CoroutineMeta* meta = global_queue_.Pop();
-        if (!meta) {
-            // Wait for work
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            continue;
-        }
-
-        meta->state = CoroutineMeta::RUNNING;
-        meta->handle.resume();
-
-        if (meta->state == CoroutineMeta::FINISHED) {
-            FreeMeta(meta);
-        }
-    }
-}
-
-} // namespace coro
-```
-
-- [ ] **Step 6: Update scheduler header for dedicated workers**
-
-```cpp
-// Revised include/coro/scheduler.h
-#pragma once
-
-#include <atomic>
-#include <memory>
-#include <mutex>
-#include <vector>
 #include <thread>
 #include "coro/meta.h"
 #include "coro/coroutine.h"
 
 namespace coro {
+
+// Thread-local current coroutine meta (for yield/suspend operations)
+extern thread_local CoroutineMeta* current_coro_meta_;
+
+// Get current coroutine's meta (returns nullptr if not in coroutine)
+inline CoroutineMeta* current_coro_meta() { return current_coro_meta_; }
 
 class CoroutineScheduler {
 public:
@@ -1146,6 +897,7 @@ public:
     Task<T> Spawn(Task<T> task) {
         CoroutineMeta* meta = AllocMeta();
         meta->handle = task.handle();
+        meta->state = CoroutineMeta::READY;
 
         // Store CoroutineMeta in promise
         task.handle().promise().set_meta(meta);
@@ -1155,9 +907,11 @@ public:
     }
 
     void EnqueueCoroutine(CoroutineMeta* meta);
-
     CoroutineMeta* AllocMeta();
     void FreeMeta(CoroutineMeta* meta);
+
+    // Get worker count
+    size_t worker_count() const { return workers_.size(); }
 
 private:
     CoroutineScheduler() = default;
@@ -1170,7 +924,7 @@ private:
     std::vector<std::thread> workers_;
     CoroutineQueue global_queue_;
 
-    std::vector<CoroutineMeta*> meta_pool_;
+    std::vector<std::unique_ptr<CoroutineMeta>> meta_pool_;
     std::mutex meta_mutex_;
 
     void InitMetaPool(size_t count);
@@ -1178,39 +932,138 @@ private:
     void CoroutineWorkerLoop();
 };
 
+// co_spawn function
 template<typename T>
 Task<T> co_spawn(Task<T> task) {
     CoroutineScheduler::Instance().Spawn(std::move(task));
     return std::move(task);
 }
 
-// Overload for SafeTask<T>
+// co_spawn_detached - fire and forget
 template<typename T>
-SafeTask<T> co_spawn(SafeTask<T> task) {
+void co_spawn_detached(Task<T> task) {
     CoroutineScheduler::Instance().Spawn(std::move(task));
-    return std::move(task);
+    // Task runs without caller waiting
 }
 
 } // namespace coro
 ```
 
-- [ ] **Step 7: Extend TaskPromise to hold CoroutineMeta**
+- [ ] **Step 4: Create scheduler implementation**
 
 ```cpp
-// Add to TaskPromise in include/coro/coroutine.h
-class TaskPromise {
-    // ... existing code ...
+// src/coro/scheduler.cpp
+#include "coro/scheduler.h"
+#include <thread>
+#include <chrono>
 
-    CoroutineMeta* meta_{nullptr};
+namespace coro {
 
-    void set_meta(CoroutineMeta* m) { meta_ = m; }
-    CoroutineMeta* meta() const { return meta_; }
-};
+thread_local CoroutineMeta* current_coro_meta_ = nullptr;
+
+CoroutineScheduler& CoroutineScheduler::Instance() {
+    static CoroutineScheduler instance;
+    return instance;
+}
+
+CoroutineScheduler::~CoroutineScheduler() {
+    Shutdown();
+    for (auto& w : workers_) {
+        if (w.joinable()) w.join();
+    }
+}
+
+void CoroutineScheduler::Init() {
+    std::call_once(init_once_, [this] {
+        InitMetaPool(256);
+        running_.store(true, std::memory_order_release);
+        StartCoroutineWorkers(4);  // 4 coroutine workers by default
+        initialized_.store(true, std::memory_order_release);
+    });
+}
+
+void CoroutineScheduler::Shutdown() {
+    running_.store(false, std::memory_order_release);
+}
+
+void CoroutineScheduler::InitMetaPool(size_t count) {
+    std::lock_guard<std::mutex> lock(meta_mutex_);
+    for (size_t i = 0; i < count; ++i) {
+        meta_pool_.push_back(std::make_unique<CoroutineMeta>());
+    }
+}
+
+CoroutineMeta* CoroutineScheduler::AllocMeta() {
+    std::lock_guard<std::mutex> lock(meta_mutex_);
+    for (auto& meta : meta_pool_) {
+        if (meta->state == CoroutineMeta::FINISHED ||
+            meta->handle == nullptr) {
+            // Reset meta
+            meta->state = CoroutineMeta::READY;
+            meta->cancel_requested.store(false, std::memory_order_relaxed);
+            meta->waiting_sync = nullptr;
+            meta->next = nullptr;
+            meta->owner_worker = nullptr;
+            return meta.get();
+        }
+    }
+    // Expand pool
+    auto meta = std::make_unique<CoroutineMeta>();
+    CoroutineMeta* ptr = meta.get();
+    meta_pool_.push_back(std::move(meta));
+    return ptr;
+}
+
+void CoroutineScheduler::FreeMeta(CoroutineMeta* meta) {
+    meta->state = CoroutineMeta::FINISHED;
+    meta->handle = nullptr;
+}
+
+void CoroutineScheduler::EnqueueCoroutine(CoroutineMeta* meta) {
+    global_queue_.Push(meta);
+}
+
+void CoroutineScheduler::StartCoroutineWorkers(int count) {
+    for (int i = 0; i < count; ++i) {
+        workers_.emplace_back([this] {
+            CoroutineWorkerLoop();
+        });
+    }
+}
+
+void CoroutineScheduler::CoroutineWorkerLoop() {
+    while (running_.load(std::memory_order_acquire)) {
+        CoroutineMeta* meta = global_queue_.Pop();
+        if (!meta) {
+            // No work, wait briefly
+            std::this_thread::sleep_for(std::chrono::microseconds(100));
+            continue;
+        }
+
+        // Set current coroutine (for yield operations)
+        current_coro_meta_ = meta;
+        meta->state = CoroutineMeta::RUNNING;
+
+        // Resume coroutine
+        meta->handle.resume();
+
+        // Clear current coroutine
+        current_coro_meta_ = nullptr;
+
+        // Handle post-resume state
+        if (meta->state == CoroutineMeta::FINISHED) {
+            FreeMeta(meta);
+        }
+    }
+}
+
+} // namespace coro
 ```
 
-- [ ] **Step 8: Update CMakeLists.txt**
+- [ ] **Step 5: Update CMakeLists.txt**
 
 ```cmake
+# Add to CORO_SOURCES
 set(CORO_SOURCES
     src/coro/frame_pool.cpp
     src/coro/coroutine.cpp
@@ -1218,36 +1071,24 @@ set(CORO_SOURCES
 )
 ```
 
-- [ ] **Step 9: Write simpler test**
+- [ ] **Step 6: Extend TaskPromise to hold CoroutineMeta**
 
 ```cpp
-// tests/coroutine_test.cpp - update spawn test
-coro::Task<int> spawned_coro() {
-    co_return 55;
-}
+// Add to TaskPromise in include/coro/coroutine.h
+private:
+    CoroutineMeta* meta_{nullptr};
 
-void test_scheduler_spawn_and_wait() {
-    coro::CoroutineScheduler::Instance().Init();
-
-    auto task = coro::co_spawn(spawned_coro());
-
-    // Wait for completion (polling)
-    while (!task.is_done()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-
-    assert(task.get() == 55);
-
-    coro::CoroutineScheduler::Instance().Shutdown();
-}
+public:
+    void set_meta(CoroutineMeta* m) { meta_ = m; }
+    CoroutineMeta* meta() const { return meta_; }
 ```
 
-- [ ] **Step 10: Run test**
+- [ ] **Step 7: Run test**
 
 Run: `cd g:/bthread && cmake -B build -S . && cmake --build build --target coroutine_test && ./build/tests/coroutine_test.exe`
 Expected: PASS
 
-- [ ] **Step 11: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 cd g:/bthread && git add include/coro/scheduler.h src/coro/scheduler.cpp include/coro/coroutine.h CMakeLists.txt tests/coroutine_test.cpp && git commit -m "feat(coro): add CoroutineScheduler with dedicated workers"
@@ -1520,16 +1361,12 @@ public:
         bool await_ready() { return false; }
 
         bool await_suspend(std::coroutine_handle<> h);
-        void await_resume() {
-            // Re-acquire mutex
-            // Note: we need a special lock that doesn't suspend here
-            // For simplicity, we'll use try_lock in a loop
-        }
+        void await_resume();  // Re-acquires mutex
 
     private:
         CoCond& cond_;
         CoMutex& mutex_;
-        std::coroutine_handle<> handle_;
+        CoroutineMeta* meta_{nullptr};
     };
 
     WaitAwaiter wait(CoMutex& mutex) { return WaitAwaiter(*this, mutex); }
@@ -1557,20 +1394,33 @@ CoCond::CoCond() = default;
 CoCond::~CoCond() = default;
 
 bool CoCond::WaitAwaiter::await_suspend(std::coroutine_handle<> h) {
-    handle_ = h;
+    // Get or create CoroutineMeta
+    meta_ = CoroutineScheduler::Instance().AllocMeta();
+    meta_->handle = h;
+    meta_->state = CoroutineMeta::SUSPENDED;
+    meta_->waiting_sync = &cond_;
 
     // Unlock mutex before waiting
     mutex_.unlock();
 
-    // Add to waiters
-    CoroutineMeta* meta = CoroutineScheduler::Instance().AllocMeta();
-    meta->handle = h;
-    meta->state = CoroutineMeta::SUSPENDED;
-    meta->waiting_sync = &cond_;
+    // Add to waiters queue
+    cond_.waiters_.Push(meta_);
 
-    cond_.waiters_.Push(meta);
+    return true;  // Suspend
+}
 
-    return true;
+void CoCond::WaitAwaiter::await_resume() {
+    // Called when coroutine resumes - need to re-acquire mutex
+    // Use a blocking lock since we're in the coroutine context
+    // This is safe because the mutex is not held by anyone else at this point
+    while (!mutex_.try_lock()) {
+        // If try_lock fails, another coroutine has the lock
+        // We need to wait for it properly using co_await
+        // For simplicity, we use a spin-yield approach here
+        // A more sophisticated implementation would use the scheduler
+        std::this_thread::yield();
+    }
+    // Mutex is now held by us
 }
 
 void CoCond::signal() {
@@ -1758,24 +1608,28 @@ namespace coro {
 ```cpp
 // Add to include/coro/coroutine.h
 
+// Yield awaiter - suspends current coroutine and re-queues it
 class YieldAwaiter {
 public:
-    bool await_ready() { return false; }
+    bool await_ready() { return false; }  // Always suspend
 
     bool await_suspend(std::coroutine_handle<> h) {
-        // Get CoroutineMeta from current coroutine
-        // Re-enqueue for later execution
-        CoroutineMeta* meta = /* need way to get meta */;
+        // Get CoroutineMeta from thread-local (set by CoroutineWorkerLoop)
+        CoroutineMeta* meta = current_coro_meta();
         if (meta) {
             meta->state = CoroutineMeta::READY;
             CoroutineScheduler::Instance().EnqueueCoroutine(meta);
+        } else {
+            // Not in scheduler context, just resume immediately
+            return false;
         }
-        return true;
+        return true;  // Suspend
     }
 
     void await_resume() {}
 };
 
+// Yield function - allows other coroutines to run
 inline YieldAwaiter yield() { return YieldAwaiter{}; }
 ```
 
@@ -1947,7 +1801,170 @@ cd g:/bthread && git add include/coro/coroutine.h tests/coroutine_test.cpp && gi
 
 ---
 
-## Task 10: Integration Tests
+## Task 10: sleep() Function
+
+**Files:**
+- Modify: `include/coro/coroutine.h`
+- Modify: `src/coro/scheduler.cpp`
+
+- [ ] **Step 1: Write failing test for sleep()**
+
+```cpp
+// Add to tests/coroutine_test.cpp
+coro::Task<int> sleep_coro() {
+    auto start = std::chrono::steady_clock::now();
+    co_await coro::sleep(std::chrono::milliseconds(100));
+    auto end = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+    co_return static_cast<int>(elapsed);
+}
+
+void test_sleep() {
+    coro::CoroutineScheduler::Instance().Init();
+
+    auto task = coro::co_spawn(sleep_coro());
+
+    while (!task.is_done()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    int elapsed = task.get();
+    assert(elapsed >= 100);  // At least 100ms passed
+    assert(elapsed < 200);   // But not too long
+
+    coro::CoroutineScheduler::Instance().Shutdown();
+}
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `cd g:/bthread && cmake --build build --target coroutine_test 2>&1 || echo "Build expected to fail"`
+Expected: Build fails with "sleep not found"
+
+- [ ] **Step 3: Add sleep() to coroutine.h**
+
+```cpp
+// Add to include/coro/coroutine.h
+#include <chrono>
+
+namespace coro {
+
+// Sleep awaiter - suspends coroutine for specified duration
+class SleepAwaiter {
+public:
+    explicit SleepAwaiter(std::chrono::milliseconds duration)
+        : duration_(duration) {}
+
+    bool await_ready() { return false; }
+
+    bool await_suspend(std::coroutine_handle<> h);
+
+    void await_resume() {}
+
+private:
+    std::chrono::milliseconds duration_;
+};
+
+// Sleep function
+inline SleepAwaiter sleep(std::chrono::milliseconds duration) {
+    return SleepAwaiter(duration);
+}
+
+} // namespace coro
+```
+
+- [ ] **Step 4: Add sleep implementation to scheduler**
+
+```cpp
+// Add to src/coro/scheduler.cpp
+#include <map>
+#include <condition_variable>
+
+namespace coro {
+
+// Simple timer system for sleep
+static std::mutex sleep_mutex;
+static std::condition_variable sleep_cv;
+static std::map<std::chrono::steady_clock::time_point, CoroutineMeta*> sleep_queue_;
+static std::atomic<bool> sleep_thread_running_{false};
+static std::thread sleep_thread_;
+
+void StartSleepThread() {
+    if (sleep_thread_running_.exchange(true)) return;
+
+    sleep_thread_ = std::thread([] {
+        while (sleep_thread_running_.load()) {
+            std::unique_lock<std::mutex> lock(sleep_mutex);
+
+            if (sleep_queue_.empty()) {
+                sleep_cv.wait_for(lock, std::chrono::milliseconds(100));
+                continue;
+            }
+
+            auto now = std::chrono::steady_clock::now();
+            auto it = sleep_queue_.begin();
+
+            while (it != sleep_queue_.end() && it->first <= now) {
+                CoroutineMeta* meta = it->second;
+                meta->state = CoroutineMeta::READY;
+                CoroutineScheduler::Instance().EnqueueCoroutine(meta);
+                it = sleep_queue_.erase(it);
+            }
+
+            if (!sleep_queue_.empty()) {
+                auto next_time = sleep_queue_.begin()->first;
+                auto wait_duration = next_time - std::chrono::steady_clock::now();
+                if (wait_duration > std::chrono::milliseconds(0)) {
+                    sleep_cv.wait_for(lock, wait_duration);
+                }
+            }
+        }
+    });
+}
+
+bool SleepAwaiter::await_suspend(std::coroutine_handle<> h) {
+    CoroutineMeta* meta = current_coro_meta();
+    if (!meta) {
+        // Not in scheduler context, use blocking sleep
+        std::this_thread::sleep_for(duration_);
+        return false;
+    }
+
+    meta->state = CoroutineMeta::SUSPENDED;
+
+    // Calculate wake time
+    auto wake_time = std::chrono::steady_clock::now() + duration_;
+
+    {
+        std::lock_guard<std::mutex> lock(sleep_mutex);
+        sleep_queue_[wake_time] = meta;
+    }
+    sleep_cv.notify_one();
+
+    // Ensure sleep thread is running
+    static std::once_flag sleep_init;
+    std::call_once(sleep_init, StartSleepThread);
+
+    return true;  // Suspend
+}
+
+} // namespace coro
+```
+
+- [ ] **Step 5: Run test**
+
+Run: `cd g:/bthread && cmake -B build -S . && cmake --build build --target coroutine_test && ./build/tests/coroutine_test.exe`
+Expected: PASS
+
+- [ ] **Step 6: Commit**
+
+```bash
+cd g:/bthread && git add include/coro/coroutine.h src/coro/scheduler.cpp tests/coroutine_test.cpp && git commit -m "feat(coro): add sleep() function for coroutine delays"
+```
+
+---
+
+## Task 11: Integration Tests
 
 **Files:**
 - Modify: `tests/coroutine_test.cpp`
@@ -2018,20 +2035,49 @@ void test_nested_coro() {
 }
 ```
 
-- [ ] **Step 3: Run all tests**
+- [ ] **Step 3: Write detached coroutine test**
+
+```cpp
+std::atomic<int> detached_counter{0};
+
+coro::Task<void> detached_coro(int id) {
+    co_await coro::sleep(std::chrono::milliseconds(50));
+    detached_counter++;
+}
+
+void test_detached_coro() {
+    coro::CoroutineScheduler::Instance().Init();
+
+    detached_counter = 0;
+
+    // Spawn detached coroutines (fire-and-forget)
+    for (int i = 0; i < 5; ++i) {
+        coro::co_spawn_detached(detached_coro(i));
+    }
+
+    // Wait for them to complete
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    assert(detached_counter.load() == 5);
+
+    coro::CoroutineScheduler::Instance().Shutdown();
+}
+```
+
+- [ ] **Step 4: Run all tests**
 
 Run: `cd g:/bthread && cmake --build build --target coroutine_test && ./build/tests/coroutine_test.exe`
 Expected: PASS (all tests)
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-cd g:/bthread && git add tests/coroutine_test.cpp && git commit -m "test(coro): add stress and nested coroutine tests"
+cd g:/bthread && git add tests/coroutine_test.cpp && git commit -m "test(coro): add stress, nested, and detached coroutine tests"
 ```
 
 ---
 
-## Task 11: Final Integration
+## Task 12: Final Integration
 
 **Files:**
 - Modify: `CMakeLists.txt` (ensure all files linked)
@@ -2121,6 +2167,10 @@ This plan implements a complete C++20 coroutine pool with:
 7. **CoCond** - Coroutine condition variable
 8. **Cancellation** - Cooperative cancellation support
 9. **yield()** - Explicit yield point
-10. **Tests** - Comprehensive test coverage
+10. **sleep()** - Coroutine sleep with timer-based wake-up
+11. **co_spawn_detached()** - Fire-and-forget coroutine spawning
+12. **Tests** - Comprehensive test coverage including detached coroutines
 
 Each task follows TDD: write failing test, implement, verify test passes, commit.
+
+**Architecture Note:** This implementation uses dedicated coroutine worker threads (not shared with bthread workers) for Phase 1 simplicity. Future versions may integrate with bthread's Worker pool for unified scheduling.
