@@ -2,6 +2,7 @@
 #include "coro/result.h"
 #include "coro/frame_pool.h"
 #include "coro/meta.h"
+#include "coro/coroutine.h"
 #include <cassert>
 #include <iostream>
 #include <thread>
@@ -247,6 +248,269 @@ void test_coroutine_queue_multithreaded() {
     std::cout << "test_coroutine_queue_multithreaded PASSED\n";
 }
 
+// === Task<T> tests ===
+
+coro::Task<int> simple_coro() {
+    co_return 42;
+}
+
+void test_task_basic() {
+    auto task = simple_coro();
+    // Directly resume (no scheduler yet)
+    task.handle().resume();
+    int result = task.get();
+    assert(result == 42);
+    std::cout << "test_task_basic PASSED\n";
+}
+
+coro::Task<void> void_coro() {
+    co_return;
+}
+
+void test_task_void() {
+    auto task = void_coro();
+    task.handle().resume();
+    task.get();  // Just verify it completes without exception
+    std::cout << "test_task_void PASSED\n";
+}
+
+coro::Task<int> exception_coro() {
+    throw std::runtime_error("test exception");
+    co_return 0;
+}
+
+void test_task_exception() {
+    auto task = exception_coro();
+    task.handle().resume();
+    try {
+        task.get();
+        assert(false && "Expected exception not thrown");
+    } catch (const std::runtime_error& e) {
+        assert(std::string(e.what()) == "test exception");
+    }
+    std::cout << "test_task_exception PASSED\n";
+}
+
+coro::Task<std::string> string_coro() {
+    co_return "hello world";
+}
+
+void test_task_string() {
+    auto task = string_coro();
+    task.handle().resume();
+    std::string result = task.get();
+    assert(result == "hello world");
+    std::cout << "test_task_string PASSED\n";
+}
+
+// === Move semantics tests ===
+
+coro::Task<int> make_int_task() {
+    co_return 123;
+}
+
+coro::Task<void> make_void_task() {
+    co_return;
+}
+
+void test_task_move_constructor() {
+    auto task1 = make_int_task();
+    auto handle1 = task1.handle();
+
+    // Move construct
+    auto task2 = std::move(task1);
+
+    // Original task should have null handle
+    assert(!task1.handle());
+    // New task should have the original handle
+    assert(task2.handle() == handle1);
+
+    // Can resume and get result from moved-to task
+    task2.handle().resume();
+    assert(task2.get() == 123);
+
+    std::cout << "test_task_move_constructor PASSED\n";
+}
+
+void test_task_move_assignment() {
+    auto task1 = make_int_task();
+    auto handle1 = task1.handle();
+
+    auto task2 = make_int_task();
+    task2.handle().resume();
+
+    // Move assign - task2's old handle should be destroyed
+    task2 = std::move(task1);
+
+    // Original task should have null handle
+    assert(!task1.handle());
+    // New task should have the original handle
+    assert(task2.handle() == handle1);
+
+    // Can resume and get result
+    task2.handle().resume();
+    assert(task2.get() == 123);
+
+    std::cout << "test_task_move_assignment PASSED\n";
+}
+
+void test_task_self_assignment() {
+    auto task = make_int_task();
+    auto handle = task.handle();
+
+    // Self-assignment should be a no-op
+#if defined(__clang__) || defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wself-move"
+#endif
+    task = std::move(task);
+#if defined(__clang__) || defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+
+    // Handle should still be valid
+    assert(task.handle() == handle);
+
+    // Can still use the task
+    task.handle().resume();
+    assert(task.get() == 123);
+
+    std::cout << "test_task_self_assignment PASSED\n";
+}
+
+void test_task_void_move_constructor() {
+    auto task1 = make_void_task();
+    auto handle1 = task1.handle();
+
+    // Move construct
+    auto task2 = std::move(task1);
+
+    // Original task should have null handle
+    assert(!task1.handle());
+    // New task should have the original handle
+    assert(task2.handle() == handle1);
+
+    // Can resume and get result from moved-to task
+    task2.handle().resume();
+    task2.get();  // Should not throw
+
+    std::cout << "test_task_void_move_constructor PASSED\n";
+}
+
+void test_task_void_move_assignment() {
+    auto task1 = make_void_task();
+    auto handle1 = task1.handle();
+
+    auto task2 = make_void_task();
+    task2.handle().resume();
+
+    // Move assign - task2's old handle should be destroyed
+    task2 = std::move(task1);
+
+    // Original task should have null handle
+    assert(!task1.handle());
+    // New task should have the original handle
+    assert(task2.handle() == handle1);
+
+    // Can resume and get result
+    task2.handle().resume();
+    task2.get();  // Should not throw
+
+    std::cout << "test_task_void_move_assignment PASSED\n";
+}
+
+void test_task_void_self_assignment() {
+    auto task = make_void_task();
+    auto handle = task.handle();
+
+    // Self-assignment should be a no-op
+#if defined(__clang__) || defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wself-move"
+#endif
+    task = std::move(task);
+#if defined(__clang__) || defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+
+    // Handle should still be valid
+    assert(task.handle() == handle);
+
+    // Can still use the task
+    task.handle().resume();
+    task.get();  // Should not throw
+
+    std::cout << "test_task_void_self_assignment PASSED\n";
+}
+
+// === Error path tests ===
+
+void test_task_get_on_incomplete_throws() {
+    auto task = make_int_task();
+    // Don't resume - task is incomplete
+
+    try {
+        task.get();
+        assert(false && "Expected exception not thrown");
+    } catch (const std::runtime_error& e) {
+        assert(std::string(e.what()) == "Task not completed");
+    }
+
+    std::cout << "test_task_get_on_incomplete_throws PASSED\n";
+}
+
+void test_task_get_on_moved_from_throws() {
+    auto task1 = make_int_task();
+    auto task2 = std::move(task1);
+
+    // task1 is now moved-from
+    try {
+        task1.get();
+        assert(false && "Expected exception not thrown");
+    } catch (const std::runtime_error& e) {
+        assert(std::string(e.what()) == "Task has no handle");
+    }
+
+    // Clean up task2
+    task2.handle().resume();
+    task2.get();
+
+    std::cout << "test_task_get_on_moved_from_throws PASSED\n";
+}
+
+void test_task_void_get_on_incomplete_throws() {
+    auto task = make_void_task();
+    // Don't resume - task is incomplete
+
+    try {
+        task.get();
+        assert(false && "Expected exception not thrown");
+    } catch (const std::runtime_error& e) {
+        assert(std::string(e.what()) == "Task not completed");
+    }
+
+    std::cout << "test_task_void_get_on_incomplete_throws PASSED\n";
+}
+
+void test_task_void_get_on_moved_from_throws() {
+    auto task1 = make_void_task();
+    auto task2 = std::move(task1);
+
+    // task1 is now moved-from
+    try {
+        task1.get();
+        assert(false && "Expected exception not thrown");
+    } catch (const std::runtime_error& e) {
+        assert(std::string(e.what()) == "Task has no handle");
+    }
+
+    // Clean up task2
+    task2.handle().resume();
+    task2.get();
+
+    std::cout << "test_task_void_get_on_moved_from_throws PASSED\n";
+}
+
 int main() {
     test_error_basic();
     test_result_value();
@@ -265,6 +529,20 @@ int main() {
     test_coroutine_queue_multi();
     test_coroutine_meta_state();
     test_coroutine_queue_multithreaded();
+    test_task_basic();
+    test_task_void();
+    test_task_exception();
+    test_task_string();
+    test_task_move_constructor();
+    test_task_move_assignment();
+    test_task_self_assignment();
+    test_task_void_move_constructor();
+    test_task_void_move_assignment();
+    test_task_void_self_assignment();
+    test_task_get_on_incomplete_throws();
+    test_task_get_on_moved_from_throws();
+    test_task_void_get_on_incomplete_throws();
+    test_task_void_get_on_moved_from_throws();
 
     std::cout << "All tests PASSED!\n";
     return 0;

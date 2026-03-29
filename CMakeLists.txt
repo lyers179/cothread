@@ -72,6 +72,7 @@ endif()
 # Coro library - C++20 coroutine support
 set(CORO_SOURCES
     src/coro/frame_pool.cpp
+    src/coro/coroutine.cpp
 )
 
 add_library(coro STATIC ${CORO_SOURCES})
