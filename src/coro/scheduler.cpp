@@ -1,12 +1,85 @@
 // src/coro/scheduler.cpp
 #include "coro/scheduler.h"
+#include "coro/coroutine.h"
 #include <thread>
 #include <chrono>
 #include <cstdio>
+#include <map>
+#include <condition_variable>
 
 namespace coro {
 
 thread_local CoroutineMeta* current_coro_meta_ = nullptr;
+
+// === Timer system for sleep() ===
+// Static variables for the sleep thread
+static std::mutex sleep_mutex;
+static std::condition_variable sleep_cv;
+static std::multimap<std::chrono::steady_clock::time_point, CoroutineMeta*> sleep_queue_;
+static std::atomic<bool> sleep_thread_running_{false};
+static std::thread sleep_thread_;
+static std::once_flag sleep_init_once_;
+
+void StartSleepThread() {
+    if (sleep_thread_running_.exchange(true)) return;
+
+    sleep_thread_ = std::thread([] {
+        while (sleep_thread_running_.load()) {
+            std::unique_lock<std::mutex> lock(sleep_mutex);
+
+            if (sleep_queue_.empty()) {
+                sleep_cv.wait_for(lock, std::chrono::milliseconds(100));
+                continue;
+            }
+
+            auto now = std::chrono::steady_clock::now();
+            auto it = sleep_queue_.begin();
+
+            // Wake up all coroutines whose wake time has passed
+            while (it != sleep_queue_.end() && it->first <= now) {
+                CoroutineMeta* meta = it->second;
+                meta->state.store(CoroutineMeta::READY, std::memory_order_release);
+                CoroutineScheduler::Instance().EnqueueCoroutine(meta);
+                it = sleep_queue_.erase(it);
+            }
+
+            // Wait for next scheduled wake time or timeout
+            if (!sleep_queue_.empty()) {
+                auto next_time = sleep_queue_.begin()->first;
+                auto wait_duration = next_time - std::chrono::steady_clock::now();
+                if (wait_duration > std::chrono::milliseconds(0)) {
+                    sleep_cv.wait_for(lock, wait_duration);
+                }
+            }
+        }
+    });
+}
+
+// SleepAwaiter::await_suspend implementation
+bool SleepAwaiter::await_suspend(std::coroutine_handle<> h) noexcept {
+    CoroutineMeta* meta = current_coro_meta();
+    if (!meta) {
+        // Not in scheduler context, use blocking sleep
+        std::this_thread::sleep_for(duration_);
+        return false;
+    }
+
+    meta->state.store(CoroutineMeta::SUSPENDED, std::memory_order_release);
+
+    // Calculate wake time
+    auto wake_time = std::chrono::steady_clock::now() + duration_;
+
+    {
+        std::lock_guard<std::mutex> lock(sleep_mutex);
+        sleep_queue_.emplace(wake_time, meta);
+    }
+    sleep_cv.notify_one();
+
+    // Ensure sleep thread is running (call_once ensures single initialization)
+    std::call_once(sleep_init_once_, StartSleepThread);
+
+    return true;  // Suspend
+}
 
 CoroutineScheduler& CoroutineScheduler::Instance() {
     static CoroutineScheduler instance;
@@ -15,6 +88,16 @@ CoroutineScheduler& CoroutineScheduler::Instance() {
 
 CoroutineScheduler::~CoroutineScheduler() {
     Shutdown();
+
+    // Shut down sleep thread if running
+    if (sleep_thread_running_.load()) {
+        sleep_thread_running_.store(false, std::memory_order_release);
+        sleep_cv.notify_all();
+        if (sleep_thread_.joinable()) {
+            sleep_thread_.join();
+        }
+    }
+
     // Notify all workers to wake up and exit
     queue_cv_.notify_all();
     for (auto& w : workers_) {

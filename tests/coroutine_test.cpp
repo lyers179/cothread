@@ -1437,6 +1437,78 @@ void test_safetask_scheduler_void_spawn() {
     std::cout << "test_safetask_scheduler_void_spawn PASSED\n";
 }
 
+// === Sleep tests ===
+
+coro::Task<int> sleep_coro() {
+    auto start = std::chrono::steady_clock::now();
+    co_await coro::sleep(std::chrono::milliseconds(100));
+    auto end = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+    co_return static_cast<int>(elapsed);
+}
+
+void test_sleep() {
+    auto task = coro::co_spawn(sleep_coro());
+
+    while (!task.is_done()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    int elapsed = task.get();
+    assert(elapsed >= 100);  // At least 100ms passed
+    assert(elapsed < 200);   // But not too long (allow some tolerance)
+
+    std::cout << "test_sleep PASSED\n";
+}
+
+coro::Task<int> multiple_sleep_coro() {
+    int total = 0;
+    for (int i = 0; i < 3; ++i) {
+        auto start = std::chrono::steady_clock::now();
+        co_await coro::sleep(std::chrono::milliseconds(50));
+        auto end = std::chrono::steady_clock::now();
+        total += static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count());
+    }
+    co_return total;
+}
+
+void test_sleep_multiple() {
+    auto task = coro::co_spawn(multiple_sleep_coro());
+
+    while (!task.is_done()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    int total = task.get();
+    assert(total >= 150);  // 3 * 50ms = 150ms minimum
+    assert(total < 250);   // Allow some tolerance
+
+    std::cout << "test_sleep_multiple PASSED\n";
+}
+
+coro::Task<int> sleep_with_yield_coro() {
+    auto start = std::chrono::steady_clock::now();
+    co_await coro::sleep(std::chrono::milliseconds(30));
+    co_await coro::yield();  // Yield after sleep
+    co_await coro::sleep(std::chrono::milliseconds(30));
+    auto end = std::chrono::steady_clock::now();
+    co_return static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count());
+}
+
+void test_sleep_with_yield() {
+    auto task = coro::co_spawn(sleep_with_yield_coro());
+
+    while (!task.is_done()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    int elapsed = task.get();
+    assert(elapsed >= 60);  // At least 60ms (30 + 30)
+    assert(elapsed < 150);  // Allow some tolerance for yield
+
+    std::cout << "test_sleep_with_yield PASSED\n";
+}
+
 // === Auto-initialization test ===
 // This test must run FIRST before any other scheduler tests
 
@@ -1495,6 +1567,11 @@ int main() {
     test_scheduler_void_task();
     test_scheduler_concurrent_spawns();
     test_scheduler_exception_in_coroutine();
+
+    // Run sleep tests (scheduler is still running) - before CoMutex tests
+    test_sleep();
+    test_sleep_multiple();
+    test_sleep_with_yield();
 
     // Run CoMutex tests (scheduler is still running)
     test_comutex_basic();

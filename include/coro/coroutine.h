@@ -5,6 +5,7 @@
 #include <exception>
 #include <utility>
 #include <mutex>
+#include <chrono>
 #include "coro/result.h"
 #include "coro/meta.h"
 #include "coro/frame_pool.h"
@@ -436,5 +437,42 @@ public:
  * The coroutine is suspended and re-queued for execution.
  */
 inline YieldAwaiter yield() { return YieldAwaiter{}; }
+
+// === Sleep support ===
+
+/**
+ * @brief Awaiter for sleeping the current coroutine.
+ * Suspends the coroutine for a specified duration and uses
+ * timer-based wake-up for efficient waiting.
+ */
+class SleepAwaiter {
+public:
+    explicit SleepAwaiter(std::chrono::milliseconds duration)
+        : duration_(duration) {}
+
+    // Always suspend - we need to schedule wake-up
+    bool await_ready() noexcept { return false; }
+
+    // Implementation in scheduler.cpp - needs timer thread
+    bool await_suspend(std::coroutine_handle<> h) noexcept;
+
+    // Nothing to return on resume
+    void await_resume() noexcept {}
+
+private:
+    std::chrono::milliseconds duration_;
+};
+
+/**
+ * @brief Sleep the current coroutine for a specified duration.
+ * Usage: co_await coro::sleep(std::chrono::milliseconds(100));
+ * The coroutine is suspended and woken up by a timer thread.
+ *
+ * @param duration The duration to sleep (in milliseconds)
+ * @return SleepAwaiter that can be co_awaited
+ */
+inline SleepAwaiter sleep(std::chrono::milliseconds duration) {
+    return SleepAwaiter(duration);
+}
 
 } // namespace coro
