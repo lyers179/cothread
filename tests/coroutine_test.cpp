@@ -1140,6 +1140,303 @@ void test_yield_multiple_coroutines() {
     std::cout << "test_yield_multiple_coroutines PASSED\n";
 }
 
+// === SafeTask tests ===
+
+coro::SafeTask<int> safe_value_coro() {
+    co_return 100;
+}
+
+coro::SafeTask<int> safe_error_coro() {
+    co_return coro::Error(5, "test error");
+}
+
+coro::SafeTask<std::string> safe_string_coro() {
+    co_return "hello safe world";
+}
+
+coro::SafeTask<int> safe_exception_coro() {
+    throw std::runtime_error("safe exception test");
+    co_return 0;
+}
+
+coro::SafeTask<int> safe_unknown_exception_coro() {
+    throw 42;  // Non-std::exception
+    co_return 0;
+}
+
+void test_safetask_basic() {
+    auto task = safe_value_coro();
+    task.handle().resume();
+    coro::Result<int> result = task.get();
+    assert(result.is_ok());
+    assert(result.value() == 100);
+    std::cout << "test_safetask_basic PASSED\n";
+}
+
+void test_safetask_error() {
+    auto task = safe_error_coro();
+    task.handle().resume();
+    coro::Result<int> result = task.get();
+    assert(result.is_err());
+    assert(result.error().code() == 5);
+    assert(result.error().message() == "test error");
+    std::cout << "test_safetask_error PASSED\n";
+}
+
+void test_safetask_string() {
+    auto task = safe_string_coro();
+    task.handle().resume();
+    coro::Result<std::string> result = task.get();
+    assert(result.is_ok());
+    assert(result.value() == "hello safe world");
+    std::cout << "test_safetask_string PASSED\n";
+}
+
+void test_safetask_exception() {
+    auto task = safe_exception_coro();
+    task.handle().resume();
+    coro::Result<int> result = task.get();
+    assert(result.is_err());
+    assert(result.error().code() == -3);  // std::exception error code
+    assert(result.error().message() == "safe exception test");
+    std::cout << "test_safetask_exception PASSED\n";
+}
+
+void test_safetask_unknown_exception() {
+    auto task = safe_unknown_exception_coro();
+    task.handle().resume();
+    coro::Result<int> result = task.get();
+    assert(result.is_err());
+    assert(result.error().code() == -4);  // unknown exception error code
+    assert(result.error().message() == "unknown exception");
+    std::cout << "test_safetask_unknown_exception PASSED\n";
+}
+
+// === SafeTask<void> tests ===
+
+coro::SafeTask<void> safe_void_coro() {
+    co_return coro::VoidSuccess{};  // Success
+}
+
+coro::SafeTask<void> safe_void_error_coro() {
+    co_return coro::Error(10, "void error");
+}
+
+coro::SafeTask<void> safe_void_exception_coro() {
+    throw std::runtime_error("void exception");
+    co_return coro::VoidSuccess{};  // Needed for compilation
+}
+
+void test_safetask_void_basic() {
+    auto task = safe_void_coro();
+    task.handle().resume();
+    coro::Result<void> result = task.get();
+    assert(result.is_ok());
+    std::cout << "test_safetask_void_basic PASSED\n";
+}
+
+void test_safetask_void_error() {
+    auto task = safe_void_error_coro();
+    task.handle().resume();
+    coro::Result<void> result = task.get();
+    assert(result.is_err());
+    assert(result.error().code() == 10);
+    assert(result.error().message() == "void error");
+    std::cout << "test_safetask_void_error PASSED\n";
+}
+
+void test_safetask_void_exception() {
+    auto task = safe_void_exception_coro();
+    task.handle().resume();
+    coro::Result<void> result = task.get();
+    assert(result.is_err());
+    assert(result.error().code() == -3);
+    assert(result.error().message() == "void exception");
+    std::cout << "test_safetask_void_exception PASSED\n";
+}
+
+// === SafeTask edge cases ===
+
+void test_safetask_no_handle() {
+    // Create a moved-from task with no handle
+    auto task1 = safe_value_coro();
+    auto task2 = std::move(task1);
+
+    // task1 now has no handle
+    coro::Result<int> result = task1.get();
+    assert(result.is_err());
+    assert(result.error().code() == -1);
+    assert(result.error().message() == "Task has no handle");
+
+    // Clean up task2
+    task2.handle().resume();
+    (void)task2.get();
+
+    std::cout << "test_safetask_no_handle PASSED\n";
+}
+
+void test_safetask_not_completed() {
+    auto task = safe_value_coro();
+    // Don't resume - task is incomplete
+
+    coro::Result<int> result = task.get();
+    assert(result.is_err());
+    assert(result.error().code() == -2);
+    assert(result.error().message() == "Task not completed");
+
+    // Clean up by resuming
+    task.handle().resume();
+    (void)task.get();
+
+    std::cout << "test_safetask_not_completed PASSED\n";
+}
+
+// === SafeTask move semantics ===
+
+coro::SafeTask<int> make_safe_int_task() {
+    co_return 123;
+}
+
+coro::SafeTask<void> make_safe_void_task() {
+    co_return coro::VoidSuccess{};
+}
+
+void test_safetask_move_constructor() {
+    auto task1 = make_safe_int_task();
+    auto handle1 = task1.handle();
+
+    auto task2 = std::move(task1);
+
+    assert(!task1.handle());
+    assert(task2.handle() == handle1);
+
+    task2.handle().resume();
+    assert(task2.get().is_ok());
+    assert(task2.get().value() == 123);
+
+    std::cout << "test_safetask_move_constructor PASSED\n";
+}
+
+void test_safetask_move_assignment() {
+    auto task1 = make_safe_int_task();
+    auto handle1 = task1.handle();
+
+    auto task2 = make_safe_int_task();
+    task2.handle().resume();
+
+    task2 = std::move(task1);
+
+    assert(!task1.handle());
+    assert(task2.handle() == handle1);
+
+    task2.handle().resume();
+    assert(task2.get().is_ok());
+    assert(task2.get().value() == 123);
+
+    std::cout << "test_safetask_move_assignment PASSED\n";
+}
+
+void test_safetask_void_move() {
+    auto task1 = make_safe_void_task();
+    auto handle1 = task1.handle();
+
+    auto task2 = std::move(task1);
+
+    assert(!task1.handle());
+    assert(task2.handle() == handle1);
+
+    task2.handle().resume();
+    assert(task2.get().is_ok());
+
+    std::cout << "test_safetask_void_move PASSED\n";
+}
+
+// === SafeTask co_await test ===
+
+coro::Task<int> await_safe_task_coro() {
+    // Create SafeTask and manually resume it before co_await
+    auto safe_task = safe_value_coro();
+    safe_task.handle().resume();
+
+    // co_await on completed SafeTask returns Result<int>
+    coro::Result<int> result = co_await safe_task;
+    if (result.is_ok()) {
+        co_return result.value() + 1;  // 100 + 1 = 101
+    }
+    co_return -1;
+}
+
+void test_safetask_co_await() {
+    auto outer_task = await_safe_task_coro();
+    outer_task.handle().resume();
+
+    assert(outer_task.is_done());
+    assert(outer_task.get() == 101);
+
+    std::cout << "test_safetask_co_await PASSED\n";
+}
+
+coro::Task<int> await_safe_error_coro() {
+    auto safe_task = safe_error_coro();
+    safe_task.handle().resume();
+
+    coro::Result<int> result = co_await safe_task;
+    if (result.is_err()) {
+        co_return result.error().code();
+    }
+    co_return 0;
+}
+
+void test_safetask_co_await_error() {
+    auto outer_task = await_safe_error_coro();
+    outer_task.handle().resume();
+
+    assert(outer_task.is_done());
+    assert(outer_task.get() == 5);
+
+    std::cout << "test_safetask_co_await_error PASSED\n";
+}
+
+// === SafeTask with scheduler test ===
+
+coro::SafeTask<int> safe_scheduler_coro(int value) {
+    co_return value * 3;
+}
+
+void test_safetask_scheduler_spawn() {
+    auto task = coro::co_spawn(safe_scheduler_coro(15));
+
+    while (!task.is_done()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    coro::Result<int> result = task.get();
+    assert(result.is_ok());
+    assert(result.value() == 45);
+
+    std::cout << "test_safetask_scheduler_spawn PASSED\n";
+}
+
+coro::SafeTask<void> safe_scheduler_void_coro(std::atomic<int>& counter) {
+    counter.fetch_add(1);
+    co_return coro::VoidSuccess{};
+}
+
+void test_safetask_scheduler_void_spawn() {
+    std::atomic<int> counter{0};
+    auto task = coro::co_spawn(safe_scheduler_void_coro(counter));
+
+    while (!task.is_done()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    coro::Result<void> result = task.get();
+    assert(result.is_ok());
+    assert(counter.load() == 1);
+
+    std::cout << "test_safetask_scheduler_void_spawn PASSED\n";
+}
+
 // === Auto-initialization test ===
 // This test must run FIRST before any other scheduler tests
 
@@ -1223,6 +1520,27 @@ int main() {
     // Run yield tests (scheduler is still running)
     test_yield_basic();
     test_yield_multiple_coroutines();
+
+    // Run SafeTask tests (basic tests, don't need scheduler)
+    test_safetask_basic();
+    test_safetask_error();
+    test_safetask_string();
+    test_safetask_exception();
+    test_safetask_unknown_exception();
+    test_safetask_void_basic();
+    test_safetask_void_error();
+    test_safetask_void_exception();
+    test_safetask_no_handle();
+    test_safetask_not_completed();
+    test_safetask_move_constructor();
+    test_safetask_move_assignment();
+    test_safetask_void_move();
+
+    // Run SafeTask scheduler tests (scheduler is still running)
+    test_safetask_co_await();
+    test_safetask_co_await_error();
+    test_safetask_scheduler_spawn();
+    test_safetask_scheduler_void_spawn();
 
     // Final shutdown
     coro::CoroutineScheduler::Instance().Shutdown();

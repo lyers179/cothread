@@ -26,6 +26,9 @@ private:
 template<typename T>
 class Result {
 public:
+    // Default constructor - creates error state (for deferred initialization)
+    Result() : data_(coro::Error(-1, "uninitialized")) {}
+
     // Success case
     explicit Result(T value) : data_(std::move(value)) {}
 

@@ -69,6 +69,29 @@ public:
         return std::move(task);
     }
 
+    /**
+     * @brief Spawn a SafeTask for execution by the scheduler.
+     * Thread-safe: Can be called from any thread concurrently.
+     * Auto-initializes the scheduler if not already initialized.
+     */
+    template<typename T>
+    SafeTask<T> Spawn(SafeTask<T> task) {
+        // Auto-initialize if not already initialized
+        if (!initialized_.load(std::memory_order_acquire)) {
+            Init();
+        }
+
+        CoroutineMeta* meta = AllocMeta();
+        meta->handle = task.handle();
+        meta->state.store(CoroutineMeta::READY, std::memory_order_release);
+
+        // Store CoroutineMeta in promise
+        task.handle().promise().set_meta(meta);
+
+        EnqueueCoroutine(meta);
+        return std::move(task);
+    }
+
     void EnqueueCoroutine(CoroutineMeta* meta);
     CoroutineMeta* AllocMeta();
     void FreeMeta(CoroutineMeta* meta);
@@ -100,6 +123,12 @@ private:
 // co_spawn function
 template<typename T>
 Task<T> co_spawn(Task<T> task) {
+    return CoroutineScheduler::Instance().Spawn(std::move(task));
+}
+
+// co_spawn for SafeTask
+template<typename T>
+SafeTask<T> co_spawn(SafeTask<T> task) {
     return CoroutineScheduler::Instance().Spawn(std::move(task));
 }
 
