@@ -183,4 +183,30 @@ inline Task<void> TaskPromise<void>::get_return_object() {
     return Task<void>(std::coroutine_handle<TaskPromise<void>>::from_promise(*this));
 }
 
+// === Yield support ===
+
+/**
+ * @brief Awaiter for yielding the current coroutine.
+ * Suspends the coroutine and re-queues it for later execution,
+ * allowing other coroutines to run.
+ */
+class YieldAwaiter {
+public:
+    // Always suspend - the purpose is to yield
+    bool await_ready() noexcept { return false; }
+
+    // Implementation in coroutine.cpp - needs scheduler.h
+    bool await_suspend(std::coroutine_handle<> h) noexcept;
+
+    // Nothing to return on resume
+    void await_resume() noexcept {}
+};
+
+/**
+ * @brief Yield the current coroutine, allowing others to run.
+ * Usage: co_await coro::yield();
+ * The coroutine is suspended and re-queued for execution.
+ */
+inline YieldAwaiter yield() { return YieldAwaiter{}; }
+
 } // namespace coro

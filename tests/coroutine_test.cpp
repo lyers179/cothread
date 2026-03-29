@@ -6,6 +6,7 @@
 #include "coro/scheduler.h"
 #include "coro/mutex.h"
 #include "coro/cond.h"
+#include "coro/cancel.h"
 #include <cassert>
 #include <iostream>
 #include <thread>
@@ -979,6 +980,166 @@ void test_cocond_concurrent_signal() {
     std::cout << "test_cocond_concurrent_signal PASSED\n";
 }
 
+// === Cancellation tests ===
+// NOTE: CancellationToken stores a raw pointer to CancelSource's internal state.
+// IMPORTANT: The token MUST NOT outlive the CancelSource that created it.
+// If the CancelSource is destroyed while a token is still in use, accessing
+// the token causes undefined behavior (dangling pointer dereference).
+// In these tests, CancelSource always outlives the token and coroutine.
+
+void test_cancel_source_basic() {
+    coro::CancelSource source;
+
+    // Initially not cancelled
+    assert(!source.is_cancelled());
+
+    // Get token
+    coro::CancellationToken token = source.token();
+    assert(!token.is_cancelled());
+
+    // Request cancellation
+    source.cancel();
+    assert(source.is_cancelled());
+    assert(token.is_cancelled());
+
+    // Reset
+    source.reset();
+    assert(!source.is_cancelled());
+    assert(!token.is_cancelled());
+
+    std::cout << "test_cancel_source_basic PASSED\n";
+}
+
+void test_cancel_token_multiple() {
+    coro::CancelSource source;
+    coro::CancellationToken token1 = source.token();
+    coro::CancellationToken token2 = source.token();
+
+    // Both tokens share the same state
+    assert(!token1.is_cancelled());
+    assert(!token2.is_cancelled());
+
+    source.cancel();
+    assert(token1.is_cancelled());
+    assert(token2.is_cancelled());
+
+    std::cout << "test_cancel_token_multiple PASSED\n";
+}
+
+coro::Task<int> cancelable_coro(coro::CancellationToken token) {
+    int count = 0;
+    while (count < 10000) {  // Large iteration count to ensure it doesn't complete quickly
+        bool cancelled = co_await token.check_cancel();
+        if (cancelled) {
+            co_return -1;  // Cancelled
+        }
+        count++;
+        co_await coro::yield();
+    }
+    co_return count;
+}
+
+void test_cancellation_in_coroutine() {
+    coro::CancelSource source;
+    auto task = coro::co_spawn(cancelable_coro(source.token()));
+
+    // Cancel almost immediately
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    source.cancel();
+
+    // Wait for completion
+    while (!task.is_done()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    // Should be cancelled (return -1) - yield() ensures the coroutine doesn't
+    // complete 1000 iterations in 10ms
+    int result = task.get();
+    assert(result == -1);  // Was cancelled
+
+    std::cout << "test_cancellation_in_coroutine PASSED\n";
+}
+
+coro::Task<int> non_cancelable_coro(coro::CancellationToken token) {
+    int count = 0;
+    while (count < 10) {
+        // Check cancel but don't stop
+        bool cancelled = co_await token.check_cancel();
+        // Continue even if cancelled (demonstration)
+        count++;
+        co_await coro::yield();
+    }
+    co_return count;
+}
+
+void test_cancellation_ignore() {
+    coro::CancelSource source;
+    auto task = coro::co_spawn(non_cancelable_coro(source.token()));
+
+    // Cancel immediately
+    source.cancel();
+
+    // Wait for completion - coroutine ignores cancellation
+    while (!task.is_done()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    assert(task.get() == 10);  // Completed fully
+
+    std::cout << "test_cancellation_ignore PASSED\n";
+}
+
+// === Yield tests ===
+
+coro::Task<int> yield_test_coro(int iterations) {
+    int count = 0;
+    for (int i = 0; i < iterations; ++i) {
+        count++;
+        co_await coro::yield();
+    }
+    co_return count;
+}
+
+void test_yield_basic() {
+    auto task = coro::co_spawn(yield_test_coro(5));
+
+    while (!task.is_done()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    assert(task.get() == 5);
+
+    std::cout << "test_yield_basic PASSED\n";
+}
+
+coro::Task<int> yield_with_counter_coro(std::atomic<int>& counter) {
+    for (int i = 0; i < 10; ++i) {
+        counter.fetch_add(1);
+        co_await coro::yield();
+    }
+    co_return counter.load();
+}
+
+void test_yield_multiple_coroutines() {
+    std::atomic<int> counter{0};
+
+    auto t1 = coro::co_spawn(yield_with_counter_coro(counter));
+    auto t2 = coro::co_spawn(yield_with_counter_coro(counter));
+    auto t3 = coro::co_spawn(yield_with_counter_coro(counter));
+
+    while (!t1.is_done() || !t2.is_done() || !t3.is_done()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    // All 3 coroutines should have run 10 iterations each
+    assert(t1.get() == 30);
+    assert(t2.get() == 30);
+    assert(t3.get() == 30);
+    assert(counter.load() == 30);
+
+    std::cout << "test_yield_multiple_coroutines PASSED\n";
+}
+
 // === Auto-initialization test ===
 // This test must run FIRST before any other scheduler tests
 
@@ -1052,6 +1213,16 @@ int main() {
     test_cocond_signal_no_waiter();
     test_cocond_broadcast_no_waiter();
     test_cocond_concurrent_signal();
+
+    // Run cancellation tests (scheduler is still running)
+    test_cancel_source_basic();
+    test_cancel_token_multiple();
+    test_cancellation_in_coroutine();
+    test_cancellation_ignore();
+
+    // Run yield tests (scheduler is still running)
+    test_yield_basic();
+    test_yield_multiple_coroutines();
 
     // Final shutdown
     coro::CoroutineScheduler::Instance().Shutdown();

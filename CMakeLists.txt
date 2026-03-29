@@ -76,6 +76,7 @@ set(CORO_SOURCES
     src/coro/scheduler.cpp
     src/coro/mutex.cpp
     src/coro/cond.cpp
+    src/coro/cancel.cpp
 )
 
 add_library(coro STATIC ${CORO_SOURCES})
