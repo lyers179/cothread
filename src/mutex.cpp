@@ -108,10 +108,13 @@ int bthread_mutex_lock(bthread_mutex_t* mutex) {
                 }
             }
 
-            // Wait for wake-up
+            // Capture current generation before waiting
             bthread::Butex* butex = static_cast<bthread::Butex*>(
                 mutex->butex.load(std::memory_order_acquire));
-            butex->Wait(0, nullptr);
+            int generation = butex->value();
+
+            // Wait for unlock (generation change)
+            butex->Wait(generation, nullptr);
         }
     } else {
         // Called from pthread, use native mutex
@@ -131,10 +134,11 @@ int bthread_mutex_unlock(bthread_mutex_t* mutex) {
         // Called from bthread
         uint64_t old_owner = mutex->owner.fetch_and(~bthread::LOCKED, std::memory_order_release);
         if (old_owner & bthread::HAS_WAITERS) {
-            // Wake one waiter
+            // Wake one waiter - increment generation first
             bthread::Butex* butex = static_cast<bthread::Butex*>(
                 mutex->butex.load(std::memory_order_acquire));
             if (butex) {
+                butex->set_value(butex->value() + 1);
                 butex->Wake(1);
             }
         }

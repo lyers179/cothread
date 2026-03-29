@@ -49,14 +49,20 @@ int bthread_cond_wait(bthread_cond_t* cond, bthread_mutex_t* mutex) {
     bthread::Worker* w = bthread::Worker::Current();
 
     if (w) {
-        // Called from bthread - use butex
+        // Called from bthread - use butex with generation mechanism
         if (!cond->butex) {
             cond->butex = new bthread::Butex();
         }
 
-        // Release mutex and wait
+        bthread::Butex* butex = static_cast<bthread::Butex*>(cond->butex);
+
+        // Capture current generation before releasing mutex
+        // This prevents missing signals that occur after unlock
+        int generation = butex->value();
+
+        // Release mutex and wait for generation change
         bthread_mutex_unlock(mutex);
-        static_cast<bthread::Butex*>(cond->butex)->Wait(0, nullptr);
+        butex->Wait(generation, nullptr);
         bthread_mutex_lock(mutex);
 
         return 0;
@@ -78,10 +84,15 @@ int bthread_cond_timedwait(bthread_cond_t* cond, bthread_mutex_t* mutex,
     bthread::Worker* w = bthread::Worker::Current();
 
     if (w) {
-        // Called from bthread - use butex with timeout
+        // Called from bthread - use butex with generation mechanism
         if (!cond->butex) {
             cond->butex = new bthread::Butex();
         }
+
+        bthread::Butex* butex = static_cast<bthread::Butex*>(cond->butex);
+
+        // Capture current generation before releasing mutex
+        int generation = butex->value();
 
         // Convert to platform timespec
         bthread::platform::timespec platform_ts;
@@ -90,9 +101,9 @@ int bthread_cond_timedwait(bthread_cond_t* cond, bthread_mutex_t* mutex,
             platform_ts.tv_nsec = abstime->tv_nsec;
         }
 
-        // Release mutex and wait
+        // Release mutex and wait for generation change
         bthread_mutex_unlock(mutex);
-        int ret = static_cast<bthread::Butex*>(cond->butex)->Wait(0, abstime ? &platform_ts : nullptr);
+        int ret = butex->Wait(generation, abstime ? &platform_ts : nullptr);
         bthread_mutex_lock(mutex);
 
         return ret;
@@ -126,8 +137,10 @@ int bthread_cond_signal(bthread_cond_t* cond) {
     bthread::Worker* w = bthread::Worker::Current();
 
     if (w && cond->butex) {
-        // Called from bthread - wake one waiter
-        static_cast<bthread::Butex*>(cond->butex)->Wake(1);
+        // Called from bthread - increment generation and wake one waiter
+        bthread::Butex* butex = static_cast<bthread::Butex*>(cond->butex);
+        butex->set_value(butex->value() + 1);
+        butex->Wake(1);
         return 0;
     } else if (cond->native_cond) {
         // Called from pthread or no butex - use native cond
@@ -145,8 +158,10 @@ int bthread_cond_broadcast(bthread_cond_t* cond) {
     bthread::Worker* w = bthread::Worker::Current();
 
     if (w && cond->butex) {
-        // Called from bthread - wake all waiters
-        static_cast<bthread::Butex*>(cond->butex)->Wake(INT_MAX);
+        // Called from bthread - increment generation and wake all waiters
+        bthread::Butex* butex = static_cast<bthread::Butex*>(cond->butex);
+        butex->set_value(butex->value() + 1);
+        butex->Wake(INT_MAX);
         return 0;
     } else if (cond->native_cond) {
         // Called from pthread or no butex - use native cond

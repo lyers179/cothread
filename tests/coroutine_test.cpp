@@ -4,11 +4,13 @@
 #include "coro/meta.h"
 #include "coro/coroutine.h"
 #include "coro/scheduler.h"
+#include "coro/mutex.h"
 #include <cassert>
 #include <iostream>
 #include <thread>
 #include <vector>
 #include <algorithm>
+#include <atomic>
 
 void test_error_basic() {
     coro::Error err(1, "test error");
@@ -645,6 +647,126 @@ void test_scheduler_exception_in_coroutine() {
     std::cout << "test_scheduler_exception_in_coroutine PASSED\n";
 }
 
+// === CoMutex tests ===
+
+coro::Task<int> mutex_test_coro(coro::CoMutex& m, int& counter) {
+    co_await m.lock();
+    counter++;
+    m.unlock();
+    co_return counter;
+}
+
+void test_comutex_basic() {
+    coro::CoMutex mutex;
+    int counter = 0;
+
+    auto t1 = coro::co_spawn(mutex_test_coro(mutex, counter));
+    auto t2 = coro::co_spawn(mutex_test_coro(mutex, counter));
+
+    while (!t1.is_done() || !t2.is_done()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    assert(counter == 2);
+    std::cout << "test_comutex_basic PASSED\n";
+}
+
+void test_comutex_try_lock() {
+    coro::CoMutex mutex;
+
+    // Should succeed initially
+    assert(mutex.try_lock());
+
+    // Should fail now (locked)
+    assert(!mutex.try_lock());
+
+    // Unlock and try again
+    mutex.unlock();
+    assert(mutex.try_lock());
+    mutex.unlock();
+
+    std::cout << "test_comutex_try_lock PASSED\n";
+}
+
+coro::Task<void> mutex_contention_coro(coro::CoMutex& m, std::atomic<int>& counter, int iterations) {
+    for (int i = 0; i < iterations; ++i) {
+        co_await m.lock();
+        counter.fetch_add(1);
+        m.unlock();
+    }
+}
+
+void test_comutex_contention() {
+    coro::CoMutex mutex;
+    std::atomic<int> counter{0};
+    constexpr int ITERATIONS = 50;
+    constexpr int NUM_COROS = 4;
+
+    std::vector<coro::Task<void>> tasks;
+    for (int i = 0; i < NUM_COROS; ++i) {
+        tasks.push_back(coro::co_spawn(mutex_contention_coro(mutex, counter, ITERATIONS)));
+    }
+
+    // Wait for all tasks to complete
+    for (auto& t : tasks) {
+        while (!t.is_done()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        t.get();  // Complete without exception
+    }
+
+    // Total increments should be NUM_COROS * ITERATIONS
+    assert(counter.load() == NUM_COROS * ITERATIONS);
+    std::cout << "test_comutex_contention PASSED\n";
+}
+
+coro::Task<int> mutex_nested_lock_coro(coro::CoMutex& m1, coro::CoMutex& m2, int& value) {
+    co_await m1.lock();
+    co_await m2.lock();
+    value += 100;
+    m2.unlock();
+    m1.unlock();
+    co_return value;
+}
+
+void test_comutex_nested_locks() {
+    coro::CoMutex mutex1;
+    coro::CoMutex mutex2;
+    int value = 0;
+
+    auto task = coro::co_spawn(mutex_nested_lock_coro(mutex1, mutex2, value));
+
+    while (!task.is_done()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    assert(task.get() == 100);
+    assert(value == 100);
+    std::cout << "test_comutex_nested_locks PASSED\n";
+}
+
+coro::Task<int> mutex_return_value_coro(coro::CoMutex& m, int input) {
+    co_await m.lock();
+    int result = input * 2;
+    m.unlock();
+    co_return result;
+}
+
+void test_comutex_with_value() {
+    coro::CoMutex mutex;
+
+    auto t1 = coro::co_spawn(mutex_return_value_coro(mutex, 10));
+    auto t2 = coro::co_spawn(mutex_return_value_coro(mutex, 20));
+
+    while (!t1.is_done() || !t2.is_done()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    assert(t1.get() == 20);
+    assert(t2.get() == 40);
+    std::cout << "test_comutex_with_value PASSED\n";
+}
+
 // === Auto-initialization test ===
 // This test must run FIRST before any other scheduler tests
 
@@ -704,7 +826,14 @@ int main() {
     test_scheduler_concurrent_spawns();
     test_scheduler_exception_in_coroutine();
 
-    // Shutdown scheduler after all tests
+    // Run CoMutex tests (scheduler is still running)
+    test_comutex_basic();
+    test_comutex_try_lock();
+    test_comutex_contention();
+    test_comutex_nested_locks();
+    test_comutex_with_value();
+
+    // Final shutdown
     coro::CoroutineScheduler::Instance().Shutdown();
 
     std::cout << "All tests PASSED!\n";

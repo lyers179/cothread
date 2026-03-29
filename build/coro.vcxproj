@@ -283,6 +283,9 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="G:\bthread\src\coro\frame_pool.cpp" />
+    <ClCompile Include="G:\bthread\src\coro\coroutine.cpp" />
+    <ClCompile Include="G:\bthread\src\coro\scheduler.cpp" />
+    <ClCompile Include="G:\bthread\src\coro\mutex.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="G:\bthread\build\ZERO_CHECK.vcxproj">

@@ -43,9 +43,13 @@ void Butex::TimeoutCallback(void* arg) {
             std::memory_order_acq_rel, std::memory_order_relaxed)) {
         ws.timed_out.store(true, std::memory_order_release);
 
-        // Re-queue the task
-        task->state.store(TaskState::READY, std::memory_order_release);
-        Scheduler::Instance().EnqueueTask(task);
+        // Only re-queue if task is already suspended
+        if (task->state.load(std::memory_order_acquire) == TaskState::SUSPENDED) {
+            task->state.store(TaskState::READY, std::memory_order_release);
+            Scheduler::Instance().EnqueueTask(task);
+        }
+        // If not suspended, the task is still running and will see wakeup=true
+        // in its double-check and return without suspending
     }
 }
 
@@ -84,6 +88,13 @@ int Butex::Wait(int expected_value, const platform::timespec* timeout) {
         return 0;
     }
 
+    // 4.5 Check if already woken by Wake (race condition: Wake stole us before we suspended)
+    if (ws.wakeup.load(std::memory_order_acquire)) {
+        // Already woken, remove from queue and return
+        RemoveFromWaitQueue(task);
+        return 0;
+    }
+
     // 5. Set up timeout
     if (timeout) {
         ws.deadline_us = platform::GetTimeOfDayUs() +
@@ -98,11 +109,31 @@ int Butex::Wait(int expected_value, const platform::timespec* timeout) {
     // 6. Record which butex we're waiting on
     task->waiting_butex = this;
 
-    // 7. Suspend
+    // 7. Set state to SUSPENDED before final wakeup check
+    // This ensures Wake can see SUSPENDED state and properly wake us
     task->state.store(TaskState::SUSPENDED, std::memory_order_release);
+
+    // 7.5 Final check for wakeup after setting SUSPENDED state
+    // This prevents the race where Wake sets wakeup but doesn't see SUSPENDED yet
+    if (ws.wakeup.load(std::memory_order_acquire)) {
+        // Already woken, restore state and return
+        task->state.store(TaskState::READY, std::memory_order_release);
+        task->waiting_butex = nullptr;
+        return 0;
+    }
+
+    // 8. Final check: ensure state is still SUSPENDED before suspending
+    // If Wake changed it to READY, we should not suspend
+    if (task->state.load(std::memory_order_acquire) != TaskState::SUSPENDED) {
+        // State changed by Wake, don't suspend
+        task->waiting_butex = nullptr;
+        return 0;
+    }
+
+    // 9. Suspend
     w->SuspendCurrent();
 
-    // 8. Resumed - check result
+    // 10. Resumed - check result
     task->waiting_butex = nullptr;
 
     if (ws.timed_out.load(std::memory_order_acquire)) {
@@ -112,9 +143,9 @@ int Butex::Wait(int expected_value, const platform::timespec* timeout) {
 }
 
 void Butex::Wake(int count) {
-    // First, change the value to wake up futex waiters
-    // This is needed for pthreads waiting via FutexWait
-    value_.store(1, std::memory_order_release);
+    // Wake futex waiters (pthreads waiting via FutexWait)
+    // Note: The caller should have already changed the value (generation)
+    // before calling Wake, so pthread waiters can detect the change
     platform::FutexWake(&value_, count);
 
     int woken = 0;
@@ -142,9 +173,14 @@ void Butex::Wake(int count) {
                     Scheduler::Instance().GetTimerThread()->Cancel(ws.timer_id);
                 }
 
-                // Re-queue the task
-                waiter->state.store(TaskState::READY, std::memory_order_release);
-                Scheduler::Instance().EnqueueTask(waiter);
+                // Only re-queue if task is already suspended
+                // If not suspended yet, the task will check wakeup and return without suspending
+                if (waiter->state.load(std::memory_order_acquire) == TaskState::SUSPENDED) {
+                    waiter->state.store(TaskState::READY, std::memory_order_release);
+                    Scheduler::Instance().EnqueueTask(waiter);
+                }
+                // If not suspended, the task is still running and will see wakeup=true
+                // in its double-check and return without suspending
             }
         }
     }
