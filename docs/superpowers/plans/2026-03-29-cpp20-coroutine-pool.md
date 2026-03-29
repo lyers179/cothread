@@ -1160,7 +1160,7 @@ public:
     // Lock awaitable
     class LockAwaiter {
     public:
-        LockAwaiter(CoMutex& mutex) : mutex_(mutex) {}
+        explicit LockAwaiter(CoMutex& mutex) : mutex_(mutex) {}
 
         bool await_ready() {
             return mutex_.try_lock();
@@ -1171,7 +1171,6 @@ public:
 
     private:
         CoMutex& mutex_;
-        std::coroutine_handle<> handle_;
     };
 
     LockAwaiter lock() { return LockAwaiter(*this); }
@@ -1209,35 +1208,32 @@ bool CoMutex::try_lock() {
 }
 
 bool CoMutex::LockAwaiter::await_suspend(std::coroutine_handle<> h) {
-    handle_ = h;
+    // Get existing CoroutineMeta from current coroutine (set by CoroutineWorkerLoop)
+    CoroutineMeta* meta = current_coro_meta();
+    if (!meta) {
+        // Not in scheduler context - should not happen in normal usage
+        return false;
+    }
 
-    // Try to acquire lock
+    // Try to acquire lock one more time
     if (mutex_.try_lock()) {
-        return false;  // Don't suspend, we got the lock
+        return false;  // Got the lock, don't suspend
     }
 
     // Mark that we have waiters
-    uint32_t state = mutex_.state_.load(std::memory_order_acquire);
-    if ((state & HAS_WAITERS) == 0) {
-        mutex_.state_.fetch_or(HAS_WAITERS, std::memory_order_release);
-    }
+    mutex_.state_.fetch_or(HAS_WAITERS, std::memory_order_release);
 
-    // Add to waiters queue
-    // Need CoroutineMeta for this coroutine
-    CoroutineMeta* meta = CoroutineScheduler::Instance().AllocMeta();
-    meta->handle = h;
+    // Set state on existing meta
     meta->state = CoroutineMeta::SUSPENDED;
     meta->waiting_sync = &mutex_;
 
+    // Add to waiters queue
     mutex_.waiters_.Push(meta);
 
     return true;  // Suspend
 }
 
 void CoMutex::unlock() {
-    // Clear locked flag
-    uint32_t state = state_.load(std::memory_order_acquire);
-
     // First, clear LOCKED
     state_.fetch_and(~LOCKED, std::memory_order_release);
 
@@ -1394,9 +1390,13 @@ CoCond::CoCond() = default;
 CoCond::~CoCond() = default;
 
 bool CoCond::WaitAwaiter::await_suspend(std::coroutine_handle<> h) {
-    // Get or create CoroutineMeta
-    meta_ = CoroutineScheduler::Instance().AllocMeta();
-    meta_->handle = h;
+    // Get existing CoroutineMeta from current coroutine
+    meta_ = current_coro_meta();
+    if (!meta_) {
+        return false;  // Not in scheduler context
+    }
+
+    // Set state on existing meta
     meta_->state = CoroutineMeta::SUSPENDED;
     meta_->waiting_sync = &cond_;
 
