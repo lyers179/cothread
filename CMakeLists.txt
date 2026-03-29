@@ -70,8 +70,12 @@ else()
 endif()
 
 # Coro library - C++20 coroutine support
-add_library(coro INTERFACE)
-target_include_directories(coro INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+set(CORO_SOURCES
+    src/coro/frame_pool.cpp
+)
+
+add_library(coro STATIC ${CORO_SOURCES})
+target_include_directories(coro PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 # Tests
 enable_testing()
