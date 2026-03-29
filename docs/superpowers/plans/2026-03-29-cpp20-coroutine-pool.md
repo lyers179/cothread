@@ -935,15 +935,14 @@ private:
 // co_spawn function
 template<typename T>
 Task<T> co_spawn(Task<T> task) {
-    CoroutineScheduler::Instance().Spawn(std::move(task));
-    return std::move(task);
+    return CoroutineScheduler::Instance().Spawn(std::move(task));
 }
 
 // co_spawn_detached - fire and forget
 template<typename T>
 void co_spawn_detached(Task<T> task) {
     CoroutineScheduler::Instance().Spawn(std::move(task));
-    // Task runs without caller waiting
+    // Task runs without caller waiting - the scheduler owns it now
 }
 
 } // namespace coro
