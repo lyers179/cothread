@@ -1,0 +1,27 @@
+# Worktrees
+.worktrees/
+
+# Build directories
+build/
+build-gcc/
+
+# IDE
+.vs/
+.vscode/
+*.user
+*.suo
+*.sln
+*.vcxproj*
+
+# Compiled files
+*.obj
+*.o
+*.lib
+*.a
+*.exe
+*.dll
+*.pdb
+*.ilk
+
+# Logs
+*.log
