@@ -24,8 +24,11 @@ enum class TaskState : uint8_t {
 };
 
 // Waiter state - embedded in TaskMeta (not on stack!)
+// Supports doubly-linked list for FIFO/LIFO flexibility
 struct WaiterState {
     std::atomic<TaskMeta*> next{nullptr};
+    std::atomic<TaskMeta*> prev{nullptr};  // For doubly-linked list
+    std::atomic<bool> in_queue{false};     // True if task is currently in wait queue
     std::atomic<bool> wakeup{false};
     std::atomic<bool> timed_out{false};
     int64_t deadline_us{0};

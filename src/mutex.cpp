@@ -64,6 +64,7 @@ int bthread_mutex_lock(bthread_mutex_t* mutex) {
 
     if (w) {
         // Called from bthread
+        // Fast path: try to acquire without waiters flag
         uint64_t expected = 0;
         if (mutex->owner.compare_exchange_strong(expected, bthread::LOCKED,
                 std::memory_order_acquire, std::memory_order_relaxed)) {
@@ -83,9 +84,14 @@ int bthread_mutex_lock(bthread_mutex_t* mutex) {
             }
         }
 
+        // Key fairness optimization from official bthread:
+        // First wait: use FIFO (append to tail) for fairness
+        // After being woken but losing the race: use LIFO (prepend to head)
+        // This gives woken threads better chance to acquire the lock
+        bool first_wait = true;
+
         while (true) {
             // Try to acquire the lock
-            // Owner can be: 0 (free), LOCKED (held), LOCKED|HAS_WAITERS (held with waiters), HAS_WAITERS (free but has waiters)
             expected = mutex->owner.load(std::memory_order_acquire);
 
             if ((expected & bthread::LOCKED) == 0) {
@@ -108,13 +114,30 @@ int bthread_mutex_lock(bthread_mutex_t* mutex) {
                 }
             }
 
-            // Capture current generation before waiting
+            // Capture current generation BEFORE checking lock state again
             bthread::Butex* butex = static_cast<bthread::Butex*>(
                 mutex->butex.load(std::memory_order_acquire));
             int generation = butex->value();
 
+            // Double-check: if lock is now free, try to acquire without waiting
+            expected = mutex->owner.load(std::memory_order_acquire);
+            if ((expected & bthread::LOCKED) == 0) {
+                uint64_t new_val = bthread::LOCKED | (expected & bthread::HAS_WAITERS);
+                if (mutex->owner.compare_exchange_strong(expected, new_val,
+                        std::memory_order_acquire, std::memory_order_relaxed)) {
+                    return 0;
+                }
+            }
+
             // Wait for unlock (generation change)
-            butex->Wait(generation, nullptr);
+            // First wait: FIFO (prepend=false), subsequent: LIFO (prepend=true)
+            butex->Wait(generation, nullptr, !first_wait);
+
+            // After being woken, mark that this is not our first wait
+            // Next time we'll use LIFO for better chance
+            first_wait = false;
+
+            // Loop back to try acquiring the lock
         }
     } else {
         // Called from pthread, use native mutex

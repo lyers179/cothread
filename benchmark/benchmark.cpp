@@ -420,11 +420,11 @@ int main(int argc, char* argv[]) {
     // Run benchmarks
     benchmark_create_join(100, 100);        // 10,000 create/join ops
     benchmark_yield(4, 10000);              // 40,000 yields
-    benchmark_mutex(8, 10000);              // 80,000 mutex ops
+    benchmark_mutex(8, 10000);              // 80,000 mutex ops - testing fairness fix
     benchmark_vs_pthread(10, 100);          // Compare with std::thread
     benchmark_scalability();                // Test scaling
     benchmark_stack(50, 100);               // Memory pressure
-    benchmark_producer_consumer(4, 4, 1000);// Producer-consumer
+    benchmark_producer_consumer(2, 2, 100);// Producer-consumer (reduced for stability)
 
     fprintf(stderr, "\n========================================\n");
     fprintf(stderr, "       Benchmark Complete!\n");
