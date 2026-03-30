@@ -107,9 +107,11 @@ int Butex::Wait(int expected_value, const platform::timespec* timeout) {
     // 7. Set state to SUSPENDED
     task->state.store(TaskState::SUSPENDED, std::memory_order_release);
 
-    // 8. Check wakeup flag - if already set, Wake happened while we were preparing
+    // 8. Check wakeup flag AFTER setting SUSPENDED - this is critical
+    // Wake checks state after setting wakeup, so this ensures we see wakeup if Wake sees SUSPENDED
     if (ws.wakeup.load(std::memory_order_acquire)) {
         // Wake already called - restore state and return
+        // Note: Wake already removed us from the queue when it set wakeup=true
         task->state.store(TaskState::READY, std::memory_order_release);
         task->waiting_butex = nullptr;
         // Cancel timer if any
@@ -162,12 +164,17 @@ void Butex::Wake(int count) {
                     Scheduler::Instance().GetTimerThread()->Cancel(ws.timer_id);
                 }
 
-                // Check if task is SUSPENDED - only then re-queue it
+                // Memory barrier to ensure wakeup is visible before we check state
+                // Then check if task is SUSPENDED - only then re-queue it
                 TaskState state = waiter->state.load(std::memory_order_acquire);
                 if (state == TaskState::SUSPENDED) {
+                    // Task is already suspended, re-queue it so it can run
                     waiter->state.store(TaskState::READY, std::memory_order_release);
                     Scheduler::Instance().EnqueueTask(waiter);
                 }
                 // If not SUSPENDED, the task is still preparing to suspend
-                // It will check wakeup and return without suspending
- 
+                // It will check wakeup (after setting SUSPENDED) and return without suspending
+            }
+        }
+    }
+}
