@@ -12,12 +12,24 @@ bthread 是一个 M:N 线程池库，将 M 个用户级线程映射到 N 个 POS
 - **CMake** 3.15+ (随 Visual Studio 附带)
 - **Windows SDK** 10.0.20348.0 或更高版本
 
+### Windows (GCC/MinGW)
+
+- **MinGW-w64** GCC 15.2.0 或更高版本
+- **CMake** 3.15+
+- **Ninja** 构建工具 (推荐)
+
 ### 编译器信息
 
 ```
-编译器: MSVC 19.34.31933.0
-汇编器: ml64.exe (MASM)
-目标架构: x86_64
+MSVC:
+  编译器: MSVC 19.34.31933.0
+  汇编器: ml64.exe (MASM)
+  目标架构: x86_64
+
+GCC/MinGW:
+  编译器: GCC 15.2.0 (MinGW-w64 x86_64-ucrt-posix-seh)
+  汇编器: GNU AS (GAS)
+  目标架构: x86_64
 ```
 
 ## 编译步骤
@@ -49,9 +61,46 @@ task_group_test.exe
 work_stealing_queue_test.exe
 ```
 
+## GCC/MinGW 编译步骤
+
+### 1. 配置项目
+
+使用 MinGW-w64 附带的 CMake 和 Ninja:
+
+```batch
+mkdir build-gcc
+cd build-gcc
+cmake -G "Ninja" -DCMAKE_CXX_COMPILER=g++.exe -DCMAKE_C_COMPILER=gcc.exe ..
+```
+
+或者指定完整路径:
+
+```batch
+mkdir build-gcc
+cd build-gcc
+C:\mingw64\mingw64\bin\cmake.exe -G "Ninja" -DCMAKE_CXX_COMPILER=C:\mingw64\mingw64\bin\g++.exe -DCMAKE_C_COMPILER=C:\mingw64\mingw64\bin\gcc.exe ..
+```
+
+### 2. 编译项目
+
+```batch
+cmake --build .
+```
+
+### 3. 运行测试
+
+```batch
+cd tests
+bthread_test.exe
+butex_test.exe
+cond_test.exe
+context_test.exe
+mutex_test.exe
+```
+
 ## 编译输出
 
-编译成功后生成以下文件:
+### MSVC 编译输出
 
 ```
 build/
@@ -63,6 +112,21 @@ build/
     ├── global_queue_test.exe # 全局队列测试
     ├── task_group_test.exe  # 任务池测试
     └── work_stealing_queue_test.exe # 工作窃取队列测试
+```
+
+### GCC/MinGW 编译输出
+
+```
+build-gcc/
+├── libbthread.a             # 静态库
+├── libcoro.a                # 协程库
+└── tests/
+    ├── bthread_test.exe     # bthread API 测试
+    ├── butex_test.exe       # Butex 同步原语测试
+    ├── cond_test.exe        # 条件变量测试
+    ├── context_test.exe     # 上下文切换测试
+    ├── mutex_test.exe       # 互斥锁测试
+    └── coroutine_test.exe   # 协程池测试
 ```
 
 ## 在项目中使用
@@ -167,7 +231,8 @@ bthread/
 │   └── platform/
 │       ├── platform.cpp
 │       ├── platform_windows.cpp
-│       └── context_windows_x64.asm # x86-64 上下文切换汇编
+│       ├── context_windows_x64.asm     # x86-64 上下文切换 (MASM/MSVC)
+│       └── context_windows_x64_gcc.S   # x86-64 上下文切换 (GAS/GCC)
 ├── tests/
 │   └── *_test.cpp              # 单元测试
 └── CMakeLists.txt
@@ -201,6 +266,23 @@ enable_language(ASM_MASM)
 A: 需要链接 `synchronization.lib`:
 ```cmake
 target_link_libraries(your_target PRIVATE synchronization)
+```
+
+### Q: GCC 编译时找不到 cmake 或 ninja?
+
+A: 确保已安装 MinGW-w64 并将 bin 目录添加到 PATH:
+```
+C:\mingw64\mingw64\bin\
+```
+
+### Q: GCC 编译时报错 "expected unqualified-id before numeric constant"?
+
+A: 这是由于 `EBUSY` 等宏与命名空间常量冲突。使用宏形式而非命名空间形式:
+```cpp
+// 错误
+assert(ret == bthread::platform::EBUSY);
+// 正确
+assert(ret == EBUSY);
 ```
 
 ## 测试结果

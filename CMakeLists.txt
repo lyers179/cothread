@@ -4,15 +4,31 @@ project(bthread VERSION 1.0.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Platform detection
+# Platform and compiler detection
 if(WIN32)
-    enable_language(ASM_MASM)
-    set(PLATFORM_SOURCES src/platform/platform_windows.cpp src/platform/context_windows_x64.asm)
     set(PLATFORM_HEADERS include/bthread/platform/platform_windows.h)
     set(PLATFORM_DEFINES BTHREAD_PLATFORM_WINDOWS)
     add_definitions(-DWIN32_LEAN_AND_MEAN -DNOMINMAX)
-    # Fix for MSVC standard library requiring EINVAL
-    add_definitions(-DEINVAL=22)
+
+    # Compiler-specific assembly file
+    if(MSVC)
+        enable_language(ASM_MASM)
+        set(PLATFORM_SOURCES
+            src/platform/platform_windows.cpp
+            src/platform/context_windows_x64.asm
+        )
+        # Fix for MSVC standard library requiring EINVAL
+        add_definitions(-DEINVAL=22)
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        enable_language(ASM)
+        set(PLATFORM_SOURCES
+            src/platform/platform_windows.cpp
+            src/platform/context_windows_x64_gcc.S
+        )
+        # GCC/Clang on Windows - no additional flags needed
+    else()
+        message(FATAL_ERROR "Unsupported compiler on Windows: ${CMAKE_CXX_COMPILER_ID}")
+    endif()
 elseif(UNIX AND NOT APPLE)
     set(PLATFORM_SOURCES src/platform/platform_linux.cpp src/platform/context_linux_x64.S)
     set(PLATFORM_HEADERS include/bthread/platform/platform_linux.h)

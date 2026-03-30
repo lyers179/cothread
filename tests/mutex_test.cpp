@@ -32,7 +32,7 @@ int main() {
     assert(ret == 0);
 
     ret = bthread_mutex_trylock(&m2);
-    assert(ret == bthread::platform::EBUSY);
+    assert(ret == EBUSY);
 
     bthread_mutex_unlock(&m2);
 
