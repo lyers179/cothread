@@ -1,0 +1,19 @@
+Start testing: Mar 30 04:05 中国标准时间
+----------------------------------------------------------
+15/15 Testing: coroutine_test
+15/15 Test: coroutine_test
+Command: "G:/bthread/build/tests/Debug/coroutine_test.exe"
+Directory: G:/bthread/build/tests
+"coroutine_test" start time: Mar 30 04:05 中国标准时间
+Output:
+----------------------------------------------------------
+Assertion failed: result == -1, file G:\bthread\tests\coroutine_test.cpp, line 1058
+<end of output>
+Test time = 120.02 sec
+----------------------------------------------------------
+Test Failed.
+"coroutine_test" end time: Mar 30 04:07 中国标准时间
+"coroutine_test" time elapsed: 00:02:00
+----------------------------------------------------------
+
+End testing: Mar 30 04:07 中国标准时间

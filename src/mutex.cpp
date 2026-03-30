@@ -164,11 +164,11 @@ int bthread_mutex_trylock(bthread_mutex_t* mutex) {
                 std::memory_order_acquire, std::memory_order_relaxed)) {
             return 0;
         }
-        return bthread::platform::EBUSY;
+        return bthread::platform::EBUSY_VAL;
     } else {
         // Called from pthread, use native mutex
 #ifdef _WIN32
-        return TryAcquireSRWLockExclusive(static_cast<SRWLOCK*>(mutex->native_mutex)) ? 0 : bthread::platform::EBUSY;
+        return TryAcquireSRWLockExclusive(static_cast<SRWLOCK*>(mutex->native_mutex)) ? 0 : bthread::platform::EBUSY_VAL;
 #else
         return pthread_mutex_trylock(static_cast<pthread_mutex_t*>(mutex->native_mutex));
 #endif

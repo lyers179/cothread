@@ -65,48 +65,88 @@ void DeallocateStack(void* stack, size_t size);
 
 // ============ Error Codes ============
 // Common error codes (matches errno values)
-// Undef Windows macros before defining our own
+// On Windows, we need to provide these since they may not be available
+// in all contexts. Use macros to ensure MSVC standard library can find them.
 #ifdef _WIN32
-#undef EPERM
-#undef ENOENT
-#undef ESRCH
-#undef EINTR
-#undef EIO
-#undef ENXIO
-#undef EAGAIN
-#undef ENOMEM
-#undef EACCES
-#undef EFAULT
-#undef EBUSY
-#undef EEXIST
-#undef ENODEV
-#undef EINVAL
-#undef ENOTTY
-#undef EDEADLK
-#undef ENAMETOOLONG
-#undef ENOSYS
-#undef ETIMEDOUT
+#ifndef EPERM
+#define EPERM 1
+#endif
+#ifndef ENOENT
+#define ENOENT 2
+#endif
+#ifndef ESRCH
+#define ESRCH 3
+#endif
+#ifndef EINTR
+#define EINTR 4
+#endif
+#ifndef EIO
+#define EIO 5
+#endif
+#ifndef ENXIO
+#define ENXIO 6
+#endif
+#ifndef EAGAIN
+#define EAGAIN 11
+#endif
+#ifndef ENOMEM
+#define ENOMEM 12
+#endif
+#ifndef EACCES
+#define EACCES 13
+#endif
+#ifndef EFAULT
+#define EFAULT 14
+#endif
+#ifndef EBUSY
+#define EBUSY 16
+#endif
+#ifndef EEXIST
+#define EEXIST 17
+#endif
+#ifndef ENODEV
+#define ENODEV 19
+#endif
+#ifndef EINVAL
+#define EINVAL 22
+#endif
+#ifndef ENOTTY
+#define ENOTTY 25
+#endif
+#ifndef EDEADLK
+#define EDEADLK 35
+#endif
+#ifndef ENAMETOOLONG
+#define ENAMETOOLONG 36
+#endif
+#ifndef ENOSYS
+#define ENOSYS 38
+#endif
+#ifndef ETIMEDOUT
+#define ETIMEDOUT 110
+#endif
 #endif
 
-inline constexpr int EPERM = 1;
-inline constexpr int ENOENT = 2;
-inline constexpr int ESRCH = 3;
-inline constexpr int EINTR = 4;
-inline constexpr int EIO = 5;
-inline constexpr int ENXIO = 6;
-inline constexpr int EAGAIN = 11;
-inline constexpr int ENOMEM = 12;
-inline constexpr int EACCES = 13;
-inline constexpr int EFAULT = 14;
-inline constexpr int EBUSY = 16;
-inline constexpr int EEXIST = 17;
-inline constexpr int ENODEV = 19;
-inline constexpr int EINVAL = 22;
-inline constexpr int ENOTTY = 25;
-inline constexpr int EDEADLK = 35;
-inline constexpr int ENAMETOOLONG = 36;
-inline constexpr int ENOSYS = 38;
-inline constexpr int ETIMEDOUT = 110;
+// Namespace constants for type-safe usage (values match macros above)
+inline constexpr int EPERM_VAL = EPERM;
+inline constexpr int ENOENT_VAL = ENOENT;
+inline constexpr int ESRCH_VAL = ESRCH;
+inline constexpr int EINTR_VAL = EINTR;
+inline constexpr int EIO_VAL = EIO;
+inline constexpr int ENXIO_VAL = ENXIO;
+inline constexpr int EAGAIN_VAL = EAGAIN;
+inline constexpr int ENOMEM_VAL = ENOMEM;
+inline constexpr int EACCES_VAL = EACCES;
+inline constexpr int EFAULT_VAL = EFAULT;
+inline constexpr int EBUSY_VAL = EBUSY;
+inline constexpr int EEXIST_VAL = EEXIST;
+inline constexpr int ENODEV_VAL = ENODEV;
+inline constexpr int EINVAL_VAL = EINVAL;
+inline constexpr int ENOTTY_VAL = ENOTTY;
+inline constexpr int EDEADLK_VAL = EDEADLK;
+inline constexpr int ENAMETOOLONG_VAL = ENAMETOOLONG;
+inline constexpr int ENOSYS_VAL = ENOSYS;
+inline constexpr int ETIMEDOUT_VAL = ETIMEDOUT;
 
 // ============ Futex Operations ============
 

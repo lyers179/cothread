@@ -20,6 +20,7 @@ G:/bthread/build/tests/CMakeFiles/stress_test.dir
 G:/bthread/build/tests/CMakeFiles/coroutine_test.dir
 G:/bthread/build/tests/CMakeFiles/RUN_TESTS.dir
 G:/bthread/build/demo/CMakeFiles/demo.dir
+G:/bthread/build/demo/CMakeFiles/coro_demo.dir
 G:/bthread/build/demo/CMakeFiles/RUN_TESTS.dir
 G:/bthread/build/benchmark/CMakeFiles/benchmark.dir
 G:/bthread/build/benchmark/CMakeFiles/RUN_TESTS.dir

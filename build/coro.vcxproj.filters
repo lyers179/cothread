@@ -13,6 +13,12 @@
     <ClCompile Include="G:\bthread\src\coro\mutex.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="G:\bthread\src\coro\cond.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="G:\bthread\src\coro\cancel.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <CustomBuild Include="G:\bthread\CMakeLists.txt" />

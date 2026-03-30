@@ -43,13 +43,14 @@ void Butex::TimeoutCallback(void* arg) {
             std::memory_order_acq_rel, std::memory_order_relaxed)) {
         ws.timed_out.store(true, std::memory_order_release);
 
-        // Only re-queue if task is already suspended
-        if (task->state.load(std::memory_order_acquire) == TaskState::SUSPENDED) {
+        // Check if task is SUSPENDED - only then re-queue it
+        TaskState state = task->state.load(std::memory_order_acquire);
+        if (state == TaskState::SUSPENDED) {
             task->state.store(TaskState::READY, std::memory_order_release);
             Scheduler::Instance().EnqueueTask(task);
         }
-        // If not suspended, the task is still running and will see wakeup=true
-        // in its double-check and return without suspending
+        // If not SUSPENDED, the task is still preparing to suspend
+        // It will check wakeup and return without suspending
     }
 }
 
@@ -81,16 +82,10 @@ int Butex::Wait(int expected_value, const platform::timespec* timeout) {
     } while (!waiters_.compare_exchange_weak(old_head, task,
             std::memory_order_release, std::memory_order_relaxed));
 
-    // 4. Double-check value
+    // 4. Double-check value after adding to queue
     if (value_.load(std::memory_order_acquire) != expected_value) {
-        // Remove from queue
-        RemoveFromWaitQueue(task);
-        return 0;
-    }
-
-    // 4.5 Check if already woken by Wake (race condition: Wake stole us before we suspended)
-    if (ws.wakeup.load(std::memory_order_acquire)) {
-        // Already woken, remove from queue and return
+        // Value changed, try to remove ourselves from queue
+        // If Wake already removed us, that's fine - we'll just not find ourselves
         RemoveFromWaitQueue(task);
         return 0;
     }
@@ -109,28 +104,22 @@ int Butex::Wait(int expected_value, const platform::timespec* timeout) {
     // 6. Record which butex we're waiting on
     task->waiting_butex = this;
 
-    // 7. Set state to SUSPENDED before final wakeup check
-    // This ensures Wake can see SUSPENDED state and properly wake us
+    // 7. Set state to SUSPENDED
     task->state.store(TaskState::SUSPENDED, std::memory_order_release);
 
-    // 7.5 Final check for wakeup after setting SUSPENDED state
-    // This prevents the race where Wake sets wakeup but doesn't see SUSPENDED yet
+    // 8. Check wakeup flag - if already set, Wake happened while we were preparing
     if (ws.wakeup.load(std::memory_order_acquire)) {
-        // Already woken, restore state and return
+        // Wake already called - restore state and return
         task->state.store(TaskState::READY, std::memory_order_release);
         task->waiting_butex = nullptr;
+        // Cancel timer if any
+        if (ws.timer_id != 0) {
+            Scheduler::Instance().GetTimerThread()->Cancel(ws.timer_id);
+        }
         return 0;
     }
 
-    // 8. Final check: ensure state is still SUSPENDED before suspending
-    // If Wake changed it to READY, we should not suspend
-    if (task->state.load(std::memory_order_acquire) != TaskState::SUSPENDED) {
-        // State changed by Wake, don't suspend
-        task->waiting_butex = nullptr;
-        return 0;
-    }
-
-    // 9. Suspend
+    // 9. Suspend - we'll be resumed by Wake or timeout
     w->SuspendCurrent();
 
     // 10. Resumed - check result
@@ -173,15 +162,12 @@ void Butex::Wake(int count) {
                     Scheduler::Instance().GetTimerThread()->Cancel(ws.timer_id);
                 }
 
-                // Only re-queue if task is already suspended
-                // If not suspended yet, the task will check wakeup and return without suspending
-                if (waiter->state.load(std::memory_order_acquire) == TaskState::SUSPENDED) {
+                // Check if task is SUSPENDED - only then re-queue it
+                TaskState state = waiter->state.load(std::memory_order_acquire);
+                if (state == TaskState::SUSPENDED) {
                     waiter->state.store(TaskState::READY, std::memory_order_release);
                     Scheduler::Instance().EnqueueTask(waiter);
                 }
-                // If not suspended, the task is still running and will see wakeup=true
-                // in its double-check and return without suspending
-            }
-        }
-    }
-}
+                // If not SUSPENDED, the task is still preparing to suspend
+                // It will check wakeup and return without suspending
+ 

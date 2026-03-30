@@ -9,6 +9,13 @@
  * 5. Work stealing efficiency
  */
 
+// Define for MSVC compatibility - must be before any system includes
+#ifdef _WIN32
+#define _CRT_NONSTDC_NO_WARNINGS
+#define _WINSOCK_DEPRECATED_NO_WARNINGS
+#include <errno.h>
+#endif
+
 #include "bthread.h"
 #include "bthread/mutex.h"
 #include "bthread/cond.h"

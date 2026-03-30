@@ -11,6 +11,8 @@ if(WIN32)
     set(PLATFORM_HEADERS include/bthread/platform/platform_windows.h)
     set(PLATFORM_DEFINES BTHREAD_PLATFORM_WINDOWS)
     add_definitions(-DWIN32_LEAN_AND_MEAN -DNOMINMAX)
+    # Fix for MSVC standard library requiring EINVAL
+    add_definitions(-DEINVAL=22)
 elseif(UNIX AND NOT APPLE)
     set(PLATFORM_SOURCES src/platform/platform_linux.cpp src/platform/context_linux_x64.S)
     set(PLATFORM_HEADERS include/bthread/platform/platform_linux.h)

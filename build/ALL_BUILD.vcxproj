@@ -202,6 +202,10 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <Project>{19DB3192-9620-308A-9F0D-CC8D8011D57E}</Project>
       <Name>coro</Name>
     </ProjectReference>
+    <ProjectReference Include="G:\bthread\build\demo\coro_demo.vcxproj">
+      <Project>{52BD107F-8716-3196-B944-B003D4955F09}</Project>
+      <Name>coro_demo</Name>
+    </ProjectReference>
     <ProjectReference Include="G:\bthread\build\tests\coroutine_test.vcxproj">
       <Project>{E4FD2E49-1F86-335B-B491-DB20616D9705}</Project>
       <Name>coroutine_test</Name>

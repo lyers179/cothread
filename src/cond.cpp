@@ -71,7 +71,7 @@ int bthread_cond_wait(bthread_cond_t* cond, bthread_mutex_t* mutex) {
 #ifdef _WIN32
         return SleepConditionVariableSRW(static_cast<CONDITION_VARIABLE*>(cond->native_cond),
                                          static_cast<SRWLOCK*>(mutex->native_mutex),
-                                         INFINITE, 0) ? 0 : bthread::platform::EINVAL;
+                                         INFINITE, 0) ? 0 : bthread::platform::EINVAL_VAL;
 #else
         return pthread_cond_wait(static_cast<pthread_cond_t*>(cond->native_cond),
                                 static_cast<pthread_mutex_t*>(mutex->native_mutex));
@@ -117,14 +117,14 @@ int bthread_cond_timedwait(bthread_cond_t* cond, bthread_mutex_t* mutex,
             int64_t target_us = abstime->tv_sec * 1000000 + abstime->tv_nsec / 1000;
             int64_t diff_ms = (target_us - now_us) / 1000;
             if (diff_ms <= 0) {
-                return bthread::platform::ETIMEDOUT;
+                return bthread::platform::ETIMEDOUT_VAL;
             }
             ms = static_cast<DWORD>(diff_ms);
         }
         BOOL result = SleepConditionVariableSRW(static_cast<CONDITION_VARIABLE*>(cond->native_cond),
                                                  static_cast<SRWLOCK*>(mutex->native_mutex),
                                                  ms, 0);
-        return result ? 0 : (GetLastError() == ERROR_TIMEOUT ? bthread::platform::ETIMEDOUT : bthread::platform::EINVAL);
+        return result ? 0 : (GetLastError() == ERROR_TIMEOUT ? bthread::platform::ETIMEDOUT_VAL : bthread::platform::EINVAL_VAL);
 #else
         return pthread_cond_timedwait(static_cast<pthread_cond_t*>(cond->native_cond),
                                       static_cast<pthread_mutex_t*>(mutex->native_mutex),
