@@ -69,6 +69,7 @@ private:
     std::mutex heap_mutex_;
 
     std::atomic<bool> running_{false};
+    std::atomic<int> wakeup_futex_{0};  // For FutexWait (must be int)
     platform::ThreadId thread_;
     std::atomic<int> next_id_{0};
 };

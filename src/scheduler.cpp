@@ -59,6 +59,7 @@ void Scheduler::Shutdown() {
     // Stop timer thread
     if (timer_thread_) {
         timer_thread_->Stop();
+        timer_thread_.reset();
     }
 }
 

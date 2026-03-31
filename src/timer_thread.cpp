@@ -31,6 +31,9 @@ void TimerThread::Stop() {
     }
 
     running_.store(false, std::memory_order_release);
+    // Wake up timer thread from FutexWait
+    wakeup_futex_.fetch_add(1, std::memory_order_release);
+    platform::FutexWake(&wakeup_futex_, 1);
     platform::JoinThread(thread_);
 
     // Clean up remaining entries
@@ -124,7 +127,8 @@ void TimerThread::TimerThreadMain() {
         ts.tv_sec = sleep_us / 1000000;
         ts.tv_nsec = (sleep_us % 1000000) * 1000;
 
-        platform::FutexWait(reinterpret_cast<std::atomic<int>*>(&running_), 1, &ts);
+        // Use dedicated futex for proper wakeups
+        platform::FutexWait(&wakeup_futex_, wakeup_futex_.load(std::memory_order_acquire), &ts);
     }
 }
 
