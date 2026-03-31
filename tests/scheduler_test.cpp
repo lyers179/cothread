@@ -48,5 +48,6 @@ int main() {
 
     fprintf(stderr, "4. Test completed!\n");
     fflush(stderr);
+    bthread_shutdown();
     return 0;
 }

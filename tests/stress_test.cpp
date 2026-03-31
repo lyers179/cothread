@@ -78,5 +78,6 @@ int main() {
     printf("    PASSED\n");
 
     printf("All stress tests passed!\n");
+    bthread_shutdown();
     return 0;
 }

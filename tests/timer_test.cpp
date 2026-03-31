@@ -44,5 +44,7 @@ int main() {
 
     fprintf(stderr, "All Timer tests passed!\n");
     fflush(stderr);
+
+    bthread_shutdown();  // Cleanup
     return 0;
 }

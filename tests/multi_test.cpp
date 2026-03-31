@@ -66,5 +66,6 @@ int main() {
     bthread_mutex_destroy(&mutex);
     fprintf(stderr, "=== Test PASSED ===\n");
     fflush(stderr);
+    bthread_shutdown();
     return 0;
 }
