@@ -3,7 +3,7 @@
 
 # Build directories
 build/
-build-gcc/
+build*
 
 # IDE
 .vs/
@@ -25,3 +25,5 @@ build-gcc/
 
 # Logs
 *.log
+
+benchmark/official_bthread_reference/

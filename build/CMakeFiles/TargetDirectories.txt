@@ -17,6 +17,7 @@ G:/bthread/build/tests/CMakeFiles/debug_test.dir
 G:/bthread/build/tests/CMakeFiles/multi_test.dir
 G:/bthread/build/tests/CMakeFiles/bthread_test.dir
 G:/bthread/build/tests/CMakeFiles/stress_test.dir
+G:/bthread/build/tests/CMakeFiles/diag_mutex.dir
 G:/bthread/build/tests/CMakeFiles/coroutine_test.dir
 G:/bthread/build/tests/CMakeFiles/RUN_TESTS.dir
 G:/bthread/build/demo/CMakeFiles/demo.dir

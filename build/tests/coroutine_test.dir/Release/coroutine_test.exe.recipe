@@ -2,7 +2,7 @@
 <Project>
   <ProjectOutputs>
     <ProjectOutput>
-      <FullPath>g:\bthread\build\x64\Release\ZERO_CHECK</FullPath>
+      <FullPath>G:\bthread\build\x64\Release\ZERO_CHECK</FullPath>
     </ProjectOutput>
     <ProjectOutput>
       <FullPath>G:\bthread\build\tests\Release\coroutine_test.exe</FullPath>

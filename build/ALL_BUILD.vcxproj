@@ -218,6 +218,10 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <Project>{A3E3EFD3-9588-3B54-9362-4C224F620279}</Project>
       <Name>demo</Name>
     </ProjectReference>
+    <ProjectReference Include="G:\bthread\build\tests\diag_mutex.vcxproj">
+      <Project>{799B157A-D049-3017-8430-348D8A6D2F8C}</Project>
+      <Name>diag_mutex</Name>
+    </ProjectReference>
     <ProjectReference Include="G:\bthread\build\tests\global_queue_test.vcxproj">
       <Project>{5B084AB4-13BD-3316-AE88-58D33AAA3A6B}</Project>
       <Name>global_queue_test</Name>
