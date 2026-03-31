@@ -1,4 +1,5 @@
 #include "bthread/task_group.h"
+#include "bthread/butex.h"
 
 #include <cstdlib>
 
@@ -63,6 +64,12 @@ void TaskGroup::DeallocTaskMeta(TaskMeta* task) {
 
     uint32_t slot = task->slot_index;
 
+    // Clean up join_butex if allocated
+    if (task->join_butex) {
+        delete static_cast<bthread::Butex*>(task->join_butex);
+        task->join_butex = nullptr;
+    }
+
     // Increment generation for next use
     uint32_t new_gen = generations_[slot].fetch_add(1, std::memory_order_relaxed) + 1;
     task->generation = new_gen;
@@ -73,7 +80,6 @@ void TaskGroup::DeallocTaskMeta(TaskMeta* task) {
     task->fn = nullptr;
     task->arg = nullptr;
     task->result = nullptr;
-    task->join_butex = nullptr;
     task->join_waiters.store(0, std::memory_order_relaxed);
     task->waiting_butex = nullptr;
     task->waiter.next.store(nullptr, std::memory_order_relaxed);

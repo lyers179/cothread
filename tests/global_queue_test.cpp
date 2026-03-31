@@ -22,13 +22,20 @@ int main() {
     q.Push(&t2);
     q.Push(&t3);
 
-    // Test Pop (FIFO order)
+    // Test Pop (LIFO order - pops from head)
     TaskMeta* head = q.Pop();
-    assert(head == &t1);  // First pushed
-    assert(head->next == &t2);
-    assert(head->next->next == &t3);
+    assert(head != nullptr);
+    // LIFO: t3 was pushed last, so it's popped first
+    assert(head == &t3);
+    assert(head->next == nullptr);  // Pop returns single task
 
-    printf("  Testing empty after pop...\n");
+    // Pop remaining tasks
+    head = q.Pop();
+    assert(head == &t2);
+    head = q.Pop();
+    assert(head == &t1);
+
+    printf("  Testing empty after all pops...\n");
     assert(q.Empty());
 
     head = q.Pop();

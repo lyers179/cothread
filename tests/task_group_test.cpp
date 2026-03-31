@@ -32,17 +32,17 @@ int main() {
     TaskMeta* decoded2 = tg.DecodeId(tid2);
     assert(decoded2 == meta2);
 
-    // Test stale ID detection
-    printf("  Testing stale ID detection...\n");
+    // Test pool reuse
+    printf("  Testing pool reuse...\n");
+    uint32_t old_gen = meta1->generation;  // Save generation before dealloc
     tg.DeallocTaskMeta(meta1);
     TaskMeta* stale_decoded = tg.DecodeId(tid1);
     assert(stale_decoded == nullptr);  // Should return nullptr for stale ID
 
-    // Test pool reuse
-    printf("  Testing pool reuse...\n");
     TaskMeta* meta3 = tg.AllocTaskMeta();
     assert(meta3 != nullptr);
-    assert(meta3->generation != meta1->generation);  // Generation should have incremented
+    // Generation should have incremented (old_gen was before dealloc, meta3 gets new gen)
+    assert(meta3->generation == old_gen + 1);  // Generation increments after dealloc
 
     // Test GetTaskBySlot
     printf("  Testing GetTaskBySlot...\n");

@@ -55,6 +55,11 @@ void Scheduler::Shutdown() {
     }
     workers_.clear();
     worker_count_.store(0, std::memory_order_release);
+
+    // Stop timer thread
+    if (timer_thread_) {
+        timer_thread_->Stop();
+    }
 }
 
 void Scheduler::StartWorkers(int count) {

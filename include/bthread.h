@@ -97,6 +97,9 @@ int bthread_timer_cancel(bthread_timer_t timer_id);
 int bthread_set_worker_count(int count);
 int bthread_get_worker_count(void);
 
+// Shutdown and cleanup resources
+void bthread_shutdown(void);
+
 // Error codes (use errno values)
 #define BTHREAD_SUCCESS 0
 #define BTHREAD_EINVAL 22

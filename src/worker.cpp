@@ -2,6 +2,7 @@
 #include "bthread/scheduler.h"
 #include "bthread/task_meta.h"
 #include "bthread/task_group.h"
+#include "bthread/butex.h"
 #include "bthread/platform/platform.h"
 
 #include <random>
@@ -103,9 +104,29 @@ void Worker::WaitForTask() {
         return;
     }
 
-    // Sleep using platform futex
+    // Check if we should exit
+    if (!Scheduler::Instance().running()) {
+        sleeping_.store(false, std::memory_order_relaxed);
+        return;
+    }
+
+    // Read sleep_token AFTER checking queues
+    // This ensures we don't miss a wake-up that happened after the check
     int expected = sleep_token_.load(std::memory_order_acquire);
-    platform::FutexWait(&sleep_token_, expected, nullptr);
+
+    // Triple-check for tasks AFTER reading sleep_token
+    // This prevents the race where a wake-up happens between queue check and FutexWait
+    if (!local_queue_.Empty() ||
+        !Scheduler::Instance().global_queue().Empty()) {
+        sleeping_.store(false, std::memory_order_relaxed);
+        return;
+    }
+
+    // Sleep using platform futex with timeout to periodically check running state
+    platform::timespec ts;
+    ts.tv_sec = 0;
+    ts.tv_nsec = 100000000;  // 100ms timeout
+    platform::FutexWait(&sleep_token_, expected, &ts);
 
     sleeping_.store(false, std::memory_order_relaxed);
 }
@@ -151,6 +172,9 @@ void Worker::HandleTaskAfterRun(TaskMeta* task) {
 void Worker::HandleFinishedTask(TaskMeta* task) {
     // Wake up any joiners
     if (task->join_waiters.load(std::memory_order_acquire) > 0 && task->join_butex) {
+        // Increment generation before waking, so joiners can detect the change
+        Butex* butex = static_cast<Butex*>(task->join_butex);
+        butex->set_value(butex->value() + 1);
         Scheduler::Instance().WakeButex(task->join_butex, INT_MAX);
     }
 

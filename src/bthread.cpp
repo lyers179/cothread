@@ -99,6 +99,11 @@ int bthread_join(bthread_t tid, void** retval) {
         return EDEADLK;
     }
 
+    // Capture generation BEFORE checking state to avoid race condition
+    // If task finishes between our state check and Wait, we need to detect it
+    Butex* join_butex = static_cast<Butex*>(task->join_butex);
+    int generation = join_butex->value();
+
     // Check if already finished
     if (task->state.load(std::memory_order_acquire) == TaskState::FINISHED) {
         if (retval) *retval = task->result;
@@ -108,9 +113,9 @@ int bthread_join(bthread_t tid, void** retval) {
         return 0;
     }
 
-    // Wait for completion
+    // Wait for completion using generation mechanism
     task->join_waiters.fetch_add(1, std::memory_order_acq_rel);
-    static_cast<Butex*>(task->join_butex)->Wait(0, nullptr);
+    join_butex->Wait(generation, nullptr);
     task->join_waiters.fetch_sub(1, std::memory_order_acq_rel);
 
     if (retval) *retval = task->result;
@@ -211,4 +216,8 @@ int bthread_set_worker_count(int count) {
 
 int bthread_get_worker_count(void) {
     return Scheduler::Instance().worker_count();
+}
+
+void bthread_shutdown(void) {
+    Scheduler::Instance().Shutdown();
 }
