@@ -1,3 +1,0 @@
-coroutine_test 0 0
----
-coroutine_test
