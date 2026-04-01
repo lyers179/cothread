@@ -17,8 +17,8 @@
 #endif
 
 #include "bthread.h"
-#include "bthread/mutex.h"
-#include "bthread/cond.h"
+#include "bthread/sync/mutex.hpp"
+#include "bthread/sync/cond.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -120,14 +120,14 @@ void benchmark_yield(int num_threads, int yields_per_thread) {
 // ==================== Benchmark 3: Mutex Contention ====================
 
 static std::atomic<int> mutex_counter{0};
-static bthread_mutex_t bench_mutex;
+static bthread::Mutex bench_mutex;
 
 void* mutex_task(void* arg) {
     int iterations = *static_cast<int*>(arg);
     for (int i = 0; i < iterations; ++i) {
-        bthread_mutex_lock(&bench_mutex);
+        bench_mutex.lock();
         mutex_counter++;
-        bthread_mutex_unlock(&bench_mutex);
+        bench_mutex.unlock();
     }
     return nullptr;
 }
@@ -136,7 +136,6 @@ void benchmark_mutex(int num_threads, int iterations_per_thread) {
     fprintf(stderr, "\n[Benchmark 3] Mutex Contention\n");
     fprintf(stderr, "  Threads: %d, Iterations per thread: %d\n", num_threads, iterations_per_thread);
 
-    bthread_mutex_init(&bench_mutex, nullptr);
     mutex_counter = 0;
 
     std::vector<bthread_t> tids(num_threads);
@@ -161,8 +160,6 @@ void benchmark_mutex(int num_threads, int iterations_per_thread) {
     fprintf(stderr, "  Expected counter: %d, Actual: %d\n", expected, actual);
     fprintf(stderr, "  Throughput: %.0f lock/unlock/sec\n", ops_per_sec);
     fprintf(stderr, "  Latency: %.2f us/op\n", us_per_op);
-
-    bthread_mutex_destroy(&bench_mutex);
 }
 
 // ==================== Benchmark 4: Comparison with std::thread ====================
@@ -317,8 +314,8 @@ void benchmark_stack(int num_threads, int iterations) {
 
 // ==================== Benchmark 7: Producer-Consumer ====================
 
-static bthread_mutex_t pc_mutex;
-static bthread_cond_t pc_cond;
+static bthread::Mutex pc_mutex;
+static bthread::CondVar pc_cond;
 static std::atomic<int> produced{0};
 static std::atomic<int> consumed{0};
 static int queue_size = 0;
@@ -327,14 +324,14 @@ static const int MAX_QUEUE = 100;
 void* producer_task(void* arg) {
     int items = *static_cast<int*>(arg);
     for (int i = 0; i < items; ++i) {
-        bthread_mutex_lock(&pc_mutex);
+        pc_mutex.lock();
         while (queue_size >= MAX_QUEUE) {
-            bthread_cond_wait(&pc_cond, &pc_mutex);
+            pc_cond.wait(pc_mutex);
         }
         queue_size++;
         produced++;
-        bthread_cond_signal(&pc_cond);
-        bthread_mutex_unlock(&pc_mutex);
+        pc_cond.notify_one();
+        pc_mutex.unlock();
     }
     return nullptr;
 }
@@ -342,14 +339,14 @@ void* producer_task(void* arg) {
 void* consumer_task(void* arg) {
     int items = *static_cast<int*>(arg);
     for (int i = 0; i < items; ++i) {
-        bthread_mutex_lock(&pc_mutex);
+        pc_mutex.lock();
         while (queue_size <= 0) {
-            bthread_cond_wait(&pc_cond, &pc_mutex);
+            pc_cond.wait(pc_mutex);
         }
         queue_size--;
         consumed++;
-        bthread_cond_signal(&pc_cond);
-        bthread_mutex_unlock(&pc_mutex);
+        pc_cond.notify_one();
+        pc_mutex.unlock();
     }
     return nullptr;
 }
@@ -359,8 +356,6 @@ void benchmark_producer_consumer(int num_producers, int num_consumers, int items
     fprintf(stderr, "  Producers: %d, Consumers: %d, Items each: %d\n",
             num_producers, num_consumers, items_each);
 
-    bthread_mutex_init(&pc_mutex, nullptr);
-    bthread_cond_init(&pc_cond, nullptr);
     produced = 0;
     consumed = 0;
     queue_size = 0;
@@ -398,9 +393,6 @@ void benchmark_producer_consumer(int num_producers, int num_consumers, int items
     fprintf(stderr, "  Total time: %.2f ms\n", elapsed);
     fprintf(stderr, "  Items produced: %d, consumed: %d\n", produced.load(), consumed.load());
     fprintf(stderr, "  Throughput: %.0f items/sec\n", items_per_sec);
-
-    bthread_mutex_destroy(&pc_mutex);
-    bthread_cond_destroy(&pc_cond);
 }
 
 // ==================== Main ====================

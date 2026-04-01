@@ -1,8 +1,8 @@
 #include "bthread.h"
-#include "bthread/mutex.h"
+#include "bthread/sync/mutex.hpp"
 #include <cstdio>
 
-static bthread_mutex_t test_mutex;
+static bthread::Mutex test_mutex;
 static int counter = 0;
 
 void* simple_mutex_task(void* arg) {
@@ -10,9 +10,9 @@ void* simple_mutex_task(void* arg) {
     printf("Task %d: starting\n", id);
 
     for (int i = 0; i < 10; ++i) {
-        bthread_mutex_lock(&test_mutex);
+        test_mutex.lock();
         counter++;
-        bthread_mutex_unlock(&test_mutex);
+        test_mutex.unlock();
     }
 
     printf("Task %d: finished\n", id);
@@ -22,7 +22,6 @@ void* simple_mutex_task(void* arg) {
 int main() {
     printf("=== Simple Mutex Test ===\n");
 
-    bthread_mutex_init(&test_mutex, nullptr);
     counter = 0;
 
     bthread_t tids[2];
@@ -38,7 +37,6 @@ int main() {
     }
 
     printf("Counter = %d (expected 20)\n", counter);
-    bthread_mutex_destroy(&test_mutex);
 
     printf("Shutting down...\n");
     bthread_shutdown();

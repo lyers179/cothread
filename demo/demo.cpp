@@ -10,8 +10,8 @@
  */
 
 #include "bthread.h"
-#include "bthread/mutex.h"
-#include "bthread/cond.h"
+#include "bthread/sync/mutex.hpp"
+#include "bthread/sync/cond.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -41,15 +41,15 @@ void demo_basic() {
 // ==================== Demo 2: Mutex protecting shared data ====================
 
 static int shared_counter = 0;
-static bthread_mutex_t counter_mutex;
+static bthread::Mutex counter_mutex;
 
 void* increment_task(void* arg) {
     int iterations = *static_cast<int*>(arg);
 
     for (int i = 0; i < iterations; ++i) {
-        bthread_mutex_lock(&counter_mutex);
+        counter_mutex.lock();
         shared_counter++;
-        bthread_mutex_unlock(&counter_mutex);
+        counter_mutex.unlock();
     }
 
     return nullptr;
@@ -58,7 +58,6 @@ void* increment_task(void* arg) {
 void demo_mutex() {
     fprintf(stderr, "\n=== Demo 2: Mutex protecting shared data ===\n");
 
-    bthread_mutex_init(&counter_mutex, nullptr);
     shared_counter = 0;
 
     const int num_threads = 4;
@@ -79,24 +78,23 @@ void demo_mutex() {
     fprintf(stderr, "[Demo 2] Final counter: %d (expected: %d)\n",
             shared_counter, num_threads * iterations);
 
-    bthread_mutex_destroy(&counter_mutex);
     fprintf(stderr, "[Demo 2] Done\n");
 }
 
 // ==================== Demo 3: Condition variable ====================
 
-static bthread_mutex_t cond_mutex;
-static bthread_cond_t cond_var;
+static bthread::Mutex cond_mutex;
+static bthread::CondVar cond_var;
 static bool ready = false;
 
 void* waiter_task(void* arg) {
     int id = *static_cast<int*>(arg);
 
-    bthread_mutex_lock(&cond_mutex);
+    cond_mutex.lock();
     while (!ready) {
-        bthread_cond_wait(&cond_var, &cond_mutex);
+        cond_var.wait(cond_mutex);
     }
-    bthread_mutex_unlock(&cond_mutex);
+    cond_mutex.unlock();
 
     fprintf(stderr, "[Demo 3] Waiter %d woke up\n", id);
     return nullptr;
@@ -112,10 +110,10 @@ void* signaler_task(void* arg) {
         bthread_yield();
     }
 
-    bthread_mutex_lock(&cond_mutex);
+    cond_mutex.lock();
     ready = true;
-    bthread_cond_broadcast(&cond_var);
-    bthread_mutex_unlock(&cond_mutex);
+    cond_var.notify_all();
+    cond_mutex.unlock();
 
     fprintf(stderr, "[Demo 3] Broadcast signal sent\n");
     return nullptr;
@@ -124,8 +122,6 @@ void* signaler_task(void* arg) {
 void demo_condition() {
     fprintf(stderr, "\n=== Demo 3: Condition variable ===\n");
 
-    bthread_mutex_init(&cond_mutex, nullptr);
-    bthread_cond_init(&cond_var, nullptr);
     ready = false;
 
     bthread_t waiters[3];
@@ -143,8 +139,6 @@ void demo_condition() {
     }
     bthread_join(signaler, nullptr);
 
-    bthread_mutex_destroy(&cond_mutex);
-    bthread_cond_destroy(&cond_var);
     fprintf(stderr, "[Demo 3] Done\n");
 }
 

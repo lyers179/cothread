@@ -1,11 +1,11 @@
 #include "bthread.h"
-#include "bthread/mutex.h"
+#include "bthread/sync/mutex.hpp"
 
 #include <cstdio>
 #include <cassert>
 
 static int counter = 0;
-static bthread_mutex_t mutex;
+static bthread::Mutex mutex;
 
 void* increment_task(void* arg) {
     int iterations = *static_cast<int*>(arg);
@@ -13,9 +13,9 @@ void* increment_task(void* arg) {
     fflush(stderr);
 
     for (int i = 0; i < iterations; ++i) {
-        bthread_mutex_lock(&mutex);
+        mutex.lock();
         counter++;
-        bthread_mutex_unlock(&mutex);
+        mutex.unlock();
     }
 
     fprintf(stderr, "    bthread finished\n");
@@ -29,10 +29,6 @@ int main() {
     setvbuf(stderr, NULL, _IONBF, 0);
 
     fprintf(stderr, "=== Multi-bthread Test ===\n");
-
-    fprintf(stderr, "1. Initializing mutex...\n");
-    fflush(stderr);
-    bthread_mutex_init(&mutex, nullptr);
 
     fprintf(stderr, "2. Creating 2 bthreads...\n");
     fflush(stderr);
@@ -63,7 +59,6 @@ int main() {
     fflush(stderr);
     assert(counter == 2 * iterations);
 
-    bthread_mutex_destroy(&mutex);
     fprintf(stderr, "=== Test PASSED ===\n");
     fflush(stderr);
     bthread_shutdown();

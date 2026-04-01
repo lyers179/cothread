@@ -1,21 +1,21 @@
 #include "bthread.h"
-#include "bthread/mutex.h"
+#include "bthread/sync/mutex.hpp"
 
 #include <cstdio>
 #include <cassert>
 #include <thread>
 #include <vector>
 
-static bthread_mutex_t mutex;
+static bthread::Mutex mutex;
 static int counter = 0;
 
 void* counter_task(void* arg) {
     int iterations = *static_cast<int*>(arg);
 
     for (int i = 0; i < iterations; ++i) {
-        bthread_mutex_lock(&mutex);
+        mutex.lock();
         counter++;
-        bthread_mutex_unlock(&mutex);
+        mutex.unlock();
     }
 
     return arg;
@@ -38,7 +38,6 @@ int main() {
     printf("Running stress tests...\n");
 
     printf("  Test 1: High concurrency...\n");
-    bthread_mutex_init(&mutex, nullptr);
     counter = 0;
 
     const int num_threads = 100;
@@ -57,7 +56,6 @@ int main() {
     }
 
     assert(counter == num_threads * iterations);
-    bthread_mutex_destroy(&mutex);
     printf("    PASSED\n");
 
     printf("  Test 2: Deep recursion...\n");

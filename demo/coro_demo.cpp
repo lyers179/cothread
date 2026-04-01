@@ -1,18 +1,17 @@
 // demo/coro_demo.cpp
 #include "coro/coroutine.h"
 #include "coro/scheduler.h"
-#include "coro/mutex.h"
-#include "coro/cond.h"
+#include "bthread/sync/mutex.hpp"
 #include "coro/cancel.h"
 
 #include <iostream>
 #include <atomic>
 #include <thread>
 
-coro::Task<void> demo_task(int id, coro::CoMutex& m, std::atomic<int>& counter) {
+coro::Task<void> demo_task(int id, bthread::Mutex& m, std::atomic<int>& counter) {
     std::cerr << "Task " << id << " starting\n";
 
-    co_await m.lock();
+    co_await m.lock_async();
     counter++;
     std::cerr << "Task " << id << " incremented counter to " << counter << "\n";
     m.unlock();
@@ -25,9 +24,9 @@ coro::Task<void> demo_task(int id, coro::CoMutex& m, std::atomic<int>& counter) 
 int main() {
     setvbuf(stderr, nullptr, _IONBF, 0);
 
-    coro::CoroutineScheduler::Instance().Init();
+    bthread::Scheduler::Instance().Init();
 
-    coro::CoMutex mutex;
+    bthread::Mutex mutex;
     std::atomic<int> counter{0};
 
     for (int i = 0; i < 5; ++i) {
@@ -39,7 +38,7 @@ int main() {
 
     std::cerr << "Final counter: " << counter << "\n";
 
-    coro::CoroutineScheduler::Instance().Shutdown();
+    bthread::Scheduler::Instance().Shutdown();
 
     return 0;
 }

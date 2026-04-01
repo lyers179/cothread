@@ -20,11 +20,12 @@ template<typename T> class Task;
 template<typename T> class TaskPromise;
 
 // Thread-local current coroutine meta (for yield/suspend operations)
-// Defined in scheduler.cpp, declared here for use in promise types
+// Defined in src/bthread/core/coro_support.cpp
 extern thread_local CoroutineMeta* current_coro_meta_;
 
 // Get current coroutine's meta (returns nullptr if not in coroutine)
-inline CoroutineMeta* current_coro_meta() { return current_coro_meta_; }
+// Implemented in src/bthread/core/coro_support.cpp
+CoroutineMeta* current_coro_meta();
 
 // Shared global frame pool for coroutine promise allocations
 inline FramePool& GetGlobalFramePool() {

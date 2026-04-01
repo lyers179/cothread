@@ -1,34 +1,41 @@
-#include "bthread.h"
-#include "bthread/cond.h"
+#include "bthread/sync/cond.hpp"
+#include "bthread/sync/mutex.hpp"
 
 #include <cstdio>
 #include <cassert>
 #include <thread>
 
-using namespace bthread;
-
 int main() {
     printf("Testing Condition Variable...\n");
 
-    printf("  Testing init/destroy...\n");
-    bthread_cond_t c;
-    int ret = bthread_cond_init(&c, nullptr);
-    assert(ret == 0);
-
-    ret = bthread_cond_destroy(&c);
-    assert(ret == 0);
-
     printf("  Testing signal/broadcast...\n");
-    bthread_cond_t c2;
-    bthread_cond_init(&c2, nullptr);
+    bthread::CondVar c;
 
-    ret = bthread_cond_signal(&c2);
-    assert(ret == 0);
+    c.notify_one();
+    c.notify_all();
 
-    ret = bthread_cond_broadcast(&c2);
-    assert(ret == 0);
+    printf("  Testing wait/signal...\n");
+    bthread::Mutex m;
+    bthread::CondVar c2;
+    bool ready = false;
 
-    bthread_cond_destroy(&c2);
+    std::thread waiter([&]() {
+        m.lock();
+        while (!ready) {
+            c2.wait(m);
+        }
+        m.unlock();
+    });
+
+    std::thread signaler([&]() {
+        m.lock();
+        ready = true;
+        c2.notify_one();
+        m.unlock();
+    });
+
+    signaler.join();
+    waiter.join();
 
     printf("All Cond tests passed!\n");
     return 0;

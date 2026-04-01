@@ -143,6 +143,15 @@ bool Mutex::try_lock() {
 }
 
 void Mutex::unlock() {
+    Worker* w = Worker::Current();
+
+    if (!w) {
+        // Called from pthread - use native mutex
+        unlock_pthread();
+        return;
+    }
+
+    // Called from bthread
     // Check for coroutine waiters first
     TaskMetaBase* waiter = dequeue_waiter();
 

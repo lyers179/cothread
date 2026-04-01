@@ -4,8 +4,6 @@
 #include "bthread/worker.h"
 #include "bthread/scheduler.h"
 #include "bthread/butex.h"
-#include "bthread/mutex.h"
-#include "bthread/cond.h"
 #include "bthread/once.h"
 #include "bthread/timer_thread.h"
 #include "bthread/platform/platform.h"

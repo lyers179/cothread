@@ -10,9 +10,6 @@
 
 namespace coro {
 
-// Thread-local current coroutine meta (for yield/suspend operations)
-thread_local CoroutineMeta* current_coro_meta_ = nullptr;
-
 // === Timer system for sleep() ===
 // Static variables for the sleep thread
 static std::mutex sleep_mutex;

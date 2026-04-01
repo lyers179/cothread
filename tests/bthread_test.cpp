@@ -1,5 +1,5 @@
 #include "bthread.h"
-#include "bthread/mutex.h"
+#include "bthread/sync/mutex.hpp"
 
 #include <cstdio>
 #include <cassert>
@@ -7,15 +7,15 @@
 #include <atomic>
 
 static int shared_counter = 0;
-static bthread_mutex_t mutex;
+static bthread::Mutex mutex;
 
 void* increment_task(void* arg) {
     int iterations = *static_cast<int*>(arg);
 
     for (int i = 0; i < iterations; ++i) {
-        bthread_mutex_lock(&mutex);
+        mutex.lock();
         shared_counter++;
-        bthread_mutex_unlock(&mutex);
+        mutex.unlock();
     }
 
     return arg;
@@ -82,7 +82,6 @@ int main() {
 
     fprintf(stderr, "  Testing multiple bthreads with mutex...\n");
     fflush(stderr);
-    bthread_mutex_init(&mutex, nullptr);
     shared_counter = 0;
 
     const int num_threads = 4;
@@ -101,7 +100,6 @@ int main() {
     }
 
     assert(shared_counter == num_threads * iterations);
-    bthread_mutex_destroy(&mutex);
 
     fprintf(stderr, "  Testing bthread_yield from bthread...\n");
     fflush(stderr);

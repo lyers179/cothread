@@ -4,8 +4,8 @@
 #include "coro/meta.h"
 #include "coro/coroutine.h"
 #include "coro/scheduler.h"
-#include "coro/mutex.h"
-#include "coro/cond.h"
+#include "bthread/sync/mutex.hpp"
+#include "bthread/sync/cond.hpp"
 #include "coro/cancel.h"
 #include <cassert>
 #include <iostream>
@@ -651,15 +651,15 @@ void test_scheduler_exception_in_coroutine() {
 
 // === CoMutex tests ===
 
-coro::Task<int> mutex_test_coro(coro::CoMutex& m, int& counter) {
-    co_await m.lock();
+coro::Task<int> mutex_test_coro(bthread::Mutex& m, int& counter) {
+    co_await m.lock_async();
     counter++;
     m.unlock();
     co_return counter;
 }
 
 void test_comutex_basic() {
-    coro::CoMutex mutex;
+    bthread::Mutex mutex;
     int counter = 0;
 
     auto t1 = coro::co_spawn(mutex_test_coro(mutex, counter));
@@ -674,7 +674,7 @@ void test_comutex_basic() {
 }
 
 void test_comutex_try_lock() {
-    coro::CoMutex mutex;
+    bthread::Mutex mutex;
 
     // Should succeed initially
     assert(mutex.try_lock());
@@ -690,16 +690,16 @@ void test_comutex_try_lock() {
     std::cout << "test_comutex_try_lock PASSED\n";
 }
 
-coro::Task<void> mutex_contention_coro(coro::CoMutex& m, std::atomic<int>& counter, int iterations) {
+coro::Task<void> mutex_contention_coro(bthread::Mutex& m, std::atomic<int>& counter, int iterations) {
     for (int i = 0; i < iterations; ++i) {
-        co_await m.lock();
+        co_await m.lock_async();
         counter.fetch_add(1);
         m.unlock();
     }
 }
 
 void test_comutex_contention() {
-    coro::CoMutex mutex;
+    bthread::Mutex mutex;
     std::atomic<int> counter{0};
     constexpr int ITERATIONS = 50;
     constexpr int NUM_COROS = 4;
@@ -722,9 +722,9 @@ void test_comutex_contention() {
     std::cout << "test_comutex_contention PASSED\n";
 }
 
-coro::Task<int> mutex_nested_lock_coro(coro::CoMutex& m1, coro::CoMutex& m2, int& value) {
-    co_await m1.lock();
-    co_await m2.lock();
+coro::Task<int> mutex_nested_lock_coro(bthread::Mutex& m1, bthread::Mutex& m2, int& value) {
+    co_await m1.lock_async();
+    co_await m2.lock_async();
     value += 100;
     m2.unlock();
     m1.unlock();
@@ -732,8 +732,8 @@ coro::Task<int> mutex_nested_lock_coro(coro::CoMutex& m1, coro::CoMutex& m2, int
 }
 
 void test_comutex_nested_locks() {
-    coro::CoMutex mutex1;
-    coro::CoMutex mutex2;
+    bthread::Mutex mutex1;
+    bthread::Mutex mutex2;
     int value = 0;
 
     auto task = coro::co_spawn(mutex_nested_lock_coro(mutex1, mutex2, value));
@@ -747,15 +747,15 @@ void test_comutex_nested_locks() {
     std::cout << "test_comutex_nested_locks PASSED\n";
 }
 
-coro::Task<int> mutex_return_value_coro(coro::CoMutex& m, int input) {
-    co_await m.lock();
+coro::Task<int> mutex_return_value_coro(bthread::Mutex& m, int input) {
+    co_await m.lock_async();
     int result = input * 2;
     m.unlock();
     co_return result;
 }
 
 void test_comutex_with_value() {
-    coro::CoMutex mutex;
+    bthread::Mutex mutex;
 
     auto t1 = coro::co_spawn(mutex_return_value_coro(mutex, 10));
     auto t2 = coro::co_spawn(mutex_return_value_coro(mutex, 20));
@@ -771,25 +771,25 @@ void test_comutex_with_value() {
 
 // === CoCond tests ===
 
-coro::Task<void> producer(coro::CoMutex& m, coro::CoCond& c, int& data) {
-    co_await m.lock();
+coro::Task<void> producer(bthread::Mutex& m, bthread::CondVar& c, int& data) {
+    co_await m.lock_async();
     data = 42;
-    c.signal();
+    c.notify_one();
     m.unlock();
 }
 
-coro::Task<void> consumer(coro::CoMutex& m, coro::CoCond& c, int& data) {
-    co_await m.lock();
+coro::Task<void> consumer(bthread::Mutex& m, bthread::CondVar& c, int& data) {
+    co_await m.lock_async();
     while (data == 0) {
-        co_await c.wait(m);
+        co_await c.wait_async(m);
     }
     assert(data == 42);
     m.unlock();
 }
 
 void test_cocond_basic() {
-    coro::CoMutex mutex;
-    coro::CoCond cond;
+    bthread::Mutex mutex;
+    bthread::CondVar cond;
     int data = 0;
 
     auto c = coro::co_spawn(consumer(mutex, cond, data));
@@ -805,29 +805,29 @@ void test_cocond_basic() {
     std::cout << "test_cocond_basic PASSED\n";
 }
 
-coro::Task<void> broadcaster(coro::CoMutex& m, coro::CoCond& c, std::atomic<int>& ready_count) {
-    co_await m.lock();
+coro::Task<void> broadcaster(bthread::Mutex& m, bthread::CondVar& c, std::atomic<int>& ready_count) {
+    co_await m.lock_async();
     // Wait until all consumers are ready
     while (ready_count.load() < 3) {
-        co_await c.wait(m);
+        co_await c.wait_async(m);
     }
     // Broadcast to wake all waiting consumers
-    c.broadcast();
+    c.notify_all();
     m.unlock();
 }
 
-coro::Task<void> consumer_for_broadcast(coro::CoMutex& m, coro::CoCond& c, std::atomic<int>& ready_count, int& data) {
-    co_await m.lock();
+coro::Task<void> consumer_for_broadcast(bthread::Mutex& m, bthread::CondVar& c, std::atomic<int>& ready_count, int& data) {
+    co_await m.lock_async();
     ready_count.fetch_add(1);
-    c.signal();  // Signal that we're ready
-    co_await c.wait(m);  // Wait for broadcast
+    c.notify_one();  // Signal that we're ready
+    co_await c.wait_async(m);  // Wait for broadcast
     data++;  // Increment after broadcast wakes us
     m.unlock();
 }
 
 void test_cocond_broadcast() {
-    coro::CoMutex mutex;
-    coro::CoCond cond;
+    bthread::Mutex mutex;
+    bthread::CondVar cond;
     std::atomic<int> ready_count{0};
     int data = 0;
 
@@ -848,24 +848,24 @@ void test_cocond_broadcast() {
     std::cout << "test_cocond_broadcast PASSED\n";
 }
 
-coro::Task<void> multi_producer(coro::CoMutex& m, coro::CoCond& c, int& data, int id) {
-    co_await m.lock();
+coro::Task<void> multi_producer(bthread::Mutex& m, bthread::CondVar& c, int& data, int id) {
+    co_await m.lock_async();
     data += id;
-    c.signal();  // Signal after each production
+    c.notify_one();  // Signal after each production
     m.unlock();
 }
 
-coro::Task<void> multi_consumer(coro::CoMutex& m, coro::CoCond& c, int& data, int expected_sum) {
-    co_await m.lock();
+coro::Task<void> multi_consumer(bthread::Mutex& m, bthread::CondVar& c, int& data, int expected_sum) {
+    co_await m.lock_async();
     while (data < expected_sum) {
-        co_await c.wait(m);
+        co_await c.wait_async(m);
     }
     m.unlock();
 }
 
 void test_cocond_multiple_signal() {
-    coro::CoMutex mutex;
-    coro::CoCond cond;
+    bthread::Mutex mutex;
+    bthread::CondVar cond;
     int data = 0;
     int expected_sum = 10 + 20 + 30;  // Sum of producer IDs
 
@@ -886,13 +886,13 @@ void test_cocond_multiple_signal() {
     std::cout << "test_cocond_multiple_signal PASSED\n";
 }
 
-coro::Task<void> signal_no_waiter_coro(coro::CoCond& c) {
-    c.signal();  // Signal when no one is waiting - should be safe
+coro::Task<void> signal_no_waiter_coro(bthread::CondVar& c) {
+    c.notify_one();  // Signal when no one is waiting - should be safe
     co_return;
 }
 
 void test_cocond_signal_no_waiter() {
-    coro::CoCond cond;
+    bthread::CondVar cond;
 
     auto task = coro::co_spawn(signal_no_waiter_coro(cond));
 
@@ -904,13 +904,13 @@ void test_cocond_signal_no_waiter() {
     std::cout << "test_cocond_signal_no_waiter PASSED\n";
 }
 
-coro::Task<void> broadcast_no_waiter_coro(coro::CoCond& c) {
-    c.broadcast();  // Broadcast when no one is waiting - should be safe
+coro::Task<void> broadcast_no_waiter_coro(bthread::CondVar& c) {
+    c.notify_all();  // Broadcast when no one is waiting - should be safe
     co_return;
 }
 
 void test_cocond_broadcast_no_waiter() {
-    coro::CoCond cond;
+    bthread::CondVar cond;
 
     auto task = coro::co_spawn(broadcast_no_waiter_coro(cond));
 
@@ -923,10 +923,10 @@ void test_cocond_broadcast_no_waiter() {
 }
 
 // Test for concurrent signal() from multiple threads
-coro::Task<void> concurrent_signal_producer(coro::CoMutex& m, coro::CoCond& c, std::atomic<int>& counter) {
-    co_await m.lock();
+coro::Task<void> concurrent_signal_producer(bthread::Mutex& m, bthread::CondVar& c, std::atomic<int>& counter) {
+    co_await m.lock_async();
     counter.fetch_add(1);
-    c.signal();
+    c.notify_one();
     m.unlock();
 }
 
@@ -935,8 +935,8 @@ void test_cocond_concurrent_signal() {
     // and don't cause data races or crashes.
     // This is a stress test rather than a functional test - we just verify
     // that the implementation handles concurrent calls correctly.
-    coro::CoMutex mutex;
-    coro::CoCond cond;
+    bthread::Mutex mutex;
+    bthread::CondVar cond;
     std::atomic<int> counter{0};
     constexpr int NUM_PRODUCERS = 8;
 
@@ -1531,9 +1531,9 @@ void test_scheduler_auto_init() {
 // === Integration tests (Task 11) ===
 
 // Stress test - many coroutines contending for mutex
-coro::Task<void> stress_worker(coro::CoMutex& m, std::atomic<int>& counter, int iterations) {
+coro::Task<void> stress_worker(bthread::Mutex& m, std::atomic<int>& counter, int iterations) {
     for (int i = 0; i < iterations; ++i) {
-        co_await m.lock();
+        co_await m.lock_async();
         counter++;
         m.unlock();
         co_await coro::yield();
@@ -1541,7 +1541,7 @@ coro::Task<void> stress_worker(coro::CoMutex& m, std::atomic<int>& counter, int 
 }
 
 void test_stress_mutex_contention() {
-    coro::CoMutex mutex;
+    bthread::Mutex mutex;
     std::atomic<int> counter{0};
     constexpr int ITERATIONS = 50;  // Reduced for faster testing
     constexpr int WORKERS = 5;
@@ -1645,9 +1645,9 @@ void test_detached_coroutines() {
 // Detached coroutines with mutex - verify proper synchronization
 std::atomic<int> detached_mutex_counter{0};
 
-coro::Task<void> detached_mutex_coro(coro::CoMutex& m, int iterations) {
+coro::Task<void> detached_mutex_coro(bthread::Mutex& m, int iterations) {
     for (int i = 0; i < iterations; ++i) {
-        co_await m.lock();
+        co_await m.lock_async();
         detached_mutex_counter.fetch_add(1);
         m.unlock();
         co_await coro::yield();
@@ -1656,7 +1656,7 @@ coro::Task<void> detached_mutex_coro(coro::CoMutex& m, int iterations) {
 
 void test_detached_coroutines_with_mutex() {
     detached_mutex_counter.store(0);
-    coro::CoMutex mutex;
+    bthread::Mutex mutex;
     constexpr int NUM_DETACHED = 3;
     constexpr int ITERATIONS = 15;
 
@@ -1676,11 +1676,11 @@ void test_detached_coroutines_with_mutex() {
 }
 
 // Stress test with mixed operations
-coro::Task<void> mixed_stress_worker(coro::CoMutex& m, coro::CoCond& c,
+coro::Task<void> mixed_stress_worker(bthread::Mutex& m, bthread::CondVar& c,
                                       std::atomic<int>& counter, int id) {
-    co_await m.lock();
+    co_await m.lock_async();
     counter.fetch_add(1);
-    c.signal();  // Signal after first increment
+    c.notify_one();  // Signal after first increment
     m.unlock();
 
     // Do some sleep/yield operations
@@ -1688,41 +1688,41 @@ coro::Task<void> mixed_stress_worker(coro::CoMutex& m, coro::CoCond& c,
     co_await coro::yield();
 
     // Another mutex lock and increment
-    co_await m.lock();
+    co_await m.lock_async();
     counter.fetch_add(1);
-    c.signal();  // Signal after second increment too!
+    c.notify_one();  // Signal after second increment too!
     m.unlock();
 }
 
-coro::Task<void> mixed_stress_waiter(coro::CoMutex& m, coro::CoCond& c,
+coro::Task<void> mixed_stress_waiter(bthread::Mutex& m, bthread::CondVar& c,
                                       std::atomic<int>& counter, int target) {
-    co_await m.lock();
+    co_await m.lock_async();
     while (counter.load() < target) {
-        co_await c.wait(m);
+        co_await c.wait_async(m);
     }
     m.unlock();
 }
 
 void test_stress_mixed_operations() {
     // Simplified stress test - just verify concurrent mutex operations work
-    coro::CoMutex mutex;
-    coro::CoCond cond;
+    bthread::Mutex mutex;
+    bthread::CondVar cond;
     std::atomic<int> counter{0};
     constexpr int NUM_WORKERS = 3;
     constexpr int TARGET = NUM_WORKERS * 2;  // Each worker increments twice
 
     // Workers that increment twice with mutex and signal
     auto worker = [&mutex, &cond, &counter]() -> coro::Task<void> {
-        co_await mutex.lock();
+        co_await mutex.lock_async();
         counter.fetch_add(1);
-        cond.signal();
+        cond.notify_one();
         mutex.unlock();
 
         co_await coro::yield();
 
-        co_await mutex.lock();
+        co_await mutex.lock_async();
         counter.fetch_add(1);
-        cond.signal();
+        cond.notify_one();
         mutex.unlock();
     };
 

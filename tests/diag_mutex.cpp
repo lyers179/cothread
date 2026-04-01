@@ -11,7 +11,7 @@
 #endif
 
 #include "bthread.h"
-#include "bthread/mutex.h"
+#include "bthread/sync/mutex.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -30,7 +30,7 @@ static std::atomic<int> wakeup_enqueues{0};
 // Track which threads are in wait queue
 static std::atomic<int> waiting_threads{0};
 
-static bthread_mutex_t diag_mutex;
+static bthread::Mutex diag_mutex;
 static std::atomic<int> counter{0};
 static std::atomic<bool> should_stop{false};
 
@@ -42,10 +42,10 @@ void* diag_mutex_task(void* arg) {
     for (int i = 0; i < iterations && !should_stop.load(); ++i) {
         lock_attempts++;
 
-        bthread_mutex_lock(&diag_mutex);
+        diag_mutex.lock();
         lock_successes++;
         counter++;
-        bthread_mutex_unlock(&diag_mutex);
+        diag_mutex.unlock();
     }
     return nullptr;
 }
@@ -60,7 +60,6 @@ int main(int argc, char* argv[]) {
     fprintf(stderr, "=== Mutex Diagnostic Test ===\n");
     fprintf(stderr, "Threads: %d, Iterations: %d\n", num_threads, iterations);
 
-    bthread_mutex_init(&diag_mutex, nullptr);
     counter = 0;
     should_stop = false;
     lock_attempts = 0;
@@ -120,8 +119,6 @@ int main(int argc, char* argv[]) {
     } else {
         fprintf(stderr, "TEST FAILED - incomplete!\n");
     }
-
-    bthread_mutex_destroy(&diag_mutex);
 
     (void)argc;
     (void)argv;

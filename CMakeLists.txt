@@ -47,8 +47,6 @@ set(BTHREAD_SOURCES
     src/worker.cpp
     src/scheduler.cpp
     src/butex.cpp
-    src/mutex.cpp
-    src/cond.cpp
     src/once.cpp
     src/timer_thread.cpp
     src/execution_queue.cpp
@@ -57,6 +55,7 @@ set(BTHREAD_SOURCES
     src/bthread/sync/cond.cpp
     src/bthread/sync/event.cpp
     src/bthread/core/task.cpp
+    src/bthread/core/coro_support.cpp
     ${PLATFORM_SOURCES}
 )
 
@@ -75,8 +74,6 @@ set(BTHREAD_HEADERS
     include/bthread/worker.h
     include/bthread/scheduler.h
     include/bthread/butex.h
-    include/bthread/mutex.h
-    include/bthread/cond.h
     include/bthread/once.h
     include/bthread/timer_thread.h
     include/bthread/execution_queue.h
@@ -108,8 +105,6 @@ set(CORO_SOURCES
     src/coro/frame_pool.cpp
     src/coro/coroutine.cpp
     src/coro/scheduler.cpp
-    src/coro/mutex.cpp
-    src/coro/cond.cpp
     src/coro/cancel.cpp
 )
 

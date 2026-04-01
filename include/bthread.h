@@ -57,24 +57,8 @@ int bthread_yield(void);
 void bthread_exit(void* retval);
 
 // ========== Synchronization Primitives ==========
-typedef struct bthread_mutex_t bthread_mutex_t;
-typedef struct bthread_cond_t bthread_cond_t;
-
-// Mutex
-int bthread_mutex_init(bthread_mutex_t* mutex, const void* attr);
-int bthread_mutex_destroy(bthread_mutex_t* mutex);
-int bthread_mutex_lock(bthread_mutex_t* mutex);
-int bthread_mutex_unlock(bthread_mutex_t* mutex);
-int bthread_mutex_trylock(bthread_mutex_t* mutex);
-
-// Condition Variable
-int bthread_cond_init(bthread_cond_t* cond, const void* attr);
-int bthread_cond_destroy(bthread_cond_t* cond);
-int bthread_cond_wait(bthread_cond_t* cond, bthread_mutex_t* mutex);
-int bthread_cond_timedwait(bthread_cond_t* cond, bthread_mutex_t* mutex,
-                           const struct timespec* abstime);
-int bthread_cond_signal(bthread_cond_t* cond);
-int bthread_cond_broadcast(bthread_cond_t* cond);
+// Note: Use modern C++ API (bthread::Mutex, bthread::CondVar) instead
+// Include <bthread/sync/mutex.hpp> and <bthread/sync/cond.hpp>
 
 // One-time initialization
 #define BTHREAD_ONCE_INIT {0}

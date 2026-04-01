@@ -1,5 +1,4 @@
-#include "bthread.h"
-#include "bthread/mutex.h"
+#include "bthread/sync/mutex.hpp"
 #include "bthread/platform/platform.h"
 
 #include <cstdio>
@@ -9,58 +8,44 @@
 int main() {
     printf("Testing Mutex...\n");
 
-    printf("  Testing init/destroy...\n");
-    bthread_mutex_t m;
-    int ret = bthread_mutex_init(&m, nullptr);
-    assert(ret == 0);
-
-    ret = bthread_mutex_destroy(&m);
-    assert(ret == 0);
-
     printf("  Testing lock/unlock...\n");
-    bthread_mutex_t m2;
-    bthread_mutex_init(&m2, nullptr);
+    bthread::Mutex m;
 
-    ret = bthread_mutex_lock(&m2);
-    assert(ret == 0);
-
-    ret = bthread_mutex_unlock(&m2);
-    assert(ret == 0);
+    m.lock();
+    m.unlock();
 
     printf("  Testing trylock...\n");
-    ret = bthread_mutex_lock(&m2);
-    assert(ret == 0);
+    m.lock();
 
-    ret = bthread_mutex_trylock(&m2);
-    assert(ret == EBUSY);
+    bool result = m.try_lock();
+    assert(!result);  // Should fail, already locked
 
-    bthread_mutex_unlock(&m2);
+    m.unlock();
 
-    ret = bthread_mutex_trylock(&m2);
-    assert(ret == 0);
+    result = m.try_lock();
+    assert(result);  // Should succeed
 
-    bthread_mutex_unlock(&m2);
+    m.unlock();
 
     printf("  Testing concurrent access...\n");
-    bthread_mutex_t m3;
-    bthread_mutex_init(&m3, nullptr);
+    bthread::Mutex m2;
 
     int counter = 0;
     const int iterations = 1000;
 
     std::thread t1([&]() {
         for (int i = 0; i < iterations; ++i) {
-            bthread_mutex_lock(&m3);
+            m2.lock();
             counter++;
-            bthread_mutex_unlock(&m3);
+            m2.unlock();
         }
     });
 
     std::thread t2([&]() {
         for (int i = 0; i < iterations; ++i) {
-            bthread_mutex_lock(&m3);
+            m2.lock();
             counter++;
-            bthread_mutex_unlock(&m3);
+            m2.unlock();
         }
     });
 
@@ -68,8 +53,6 @@ int main() {
     t2.join();
 
     assert(counter == iterations * 2);
-
-    bthread_mutex_destroy(&m3);
 
     printf("All Mutex tests passed!\n");
     return 0;
