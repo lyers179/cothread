@@ -236,7 +236,7 @@ void* counter_task(void* arg) {
 void benchmark_scalability() {
     fprintf(stderr, "\n[Benchmark 5] Scalability (work stealing)\n");
 
-    const int iterations = 1000;
+    const int iterations = 100;  // Reduced from 1000
     int worker_counts[] = {1, 2, 4, 8, 16};
     int num_configs = sizeof(worker_counts) / sizeof(worker_counts[0]);
 
@@ -410,13 +410,13 @@ int main(int argc, char* argv[]) {
     fprintf(stderr, "\nWorker threads: %d\n", workers > 0 ? workers : 8);
 
     // Run benchmarks
-    benchmark_create_join(10, 10);         // Reduced: 100 create/join ops
+    benchmark_create_join(10, 10);         // 100 create/join ops
     benchmark_yield(4, 1000);              // 4,000 yields
     benchmark_mutex(4, 1000);              // 4,000 mutex ops
-    // benchmark_vs_pthread(4, 10);        // Skip for now - causes hang
-    // benchmark_scalability();            // Skip for now
-    // benchmark_stack(10, 10);            // Skip for now
-    // benchmark_producer_consumer(2, 2, 10); // Skip for now
+    benchmark_vs_pthread(4, 10);           // Compare with std::thread
+    benchmark_scalability();               // Test scaling
+    benchmark_stack(10, 10);               // Memory pressure
+    benchmark_producer_consumer(2, 2, 10);// Producer-consumer
 
     fprintf(stderr, "\n========================================\n");
     fprintf(stderr, "       Benchmark Complete!\n");
