@@ -88,21 +88,6 @@ CoroutineScheduler& CoroutineScheduler::Instance() {
 
 CoroutineScheduler::~CoroutineScheduler() {
     Shutdown();
-
-    // Shut down sleep thread if running
-    if (sleep_thread_running_.load()) {
-        sleep_thread_running_.store(false, std::memory_order_release);
-        sleep_cv.notify_all();
-        if (sleep_thread_.joinable()) {
-            sleep_thread_.join();
-        }
-    }
-
-    // Notify all workers to wake up and exit
-    queue_cv_.notify_all();
-    for (auto& w : workers_) {
-        if (w.joinable()) w.join();
-    }
 }
 
 void CoroutineScheduler::Init() {
@@ -115,8 +100,31 @@ void CoroutineScheduler::Init() {
 }
 
 void CoroutineScheduler::Shutdown() {
+    // Guard against multiple shutdown calls
+    if (!running_.load(std::memory_order_acquire)) {
+        return;
+    }
+
+    // Signal all workers to stop
     running_.store(false, std::memory_order_release);
     queue_cv_.notify_all();
+
+    // Shut down sleep thread if running
+    if (sleep_thread_running_.load()) {
+        sleep_thread_running_.store(false, std::memory_order_release);
+        sleep_cv.notify_all();
+        if (sleep_thread_.joinable()) {
+            sleep_thread_.join();
+        }
+    }
+
+    // Join all worker threads
+    for (auto& w : workers_) {
+        if (w.joinable()) {
+            w.join();
+        }
+    }
+    workers_.clear();
 }
 
 void CoroutineScheduler::InitMetaPool(size_t count) {

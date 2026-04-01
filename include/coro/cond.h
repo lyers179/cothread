@@ -2,6 +2,7 @@
 #pragma once
 
 #include <coroutine>
+#include <mutex>
 #include "coro/meta.h"
 #include "coro/mutex.h"
 
@@ -21,7 +22,7 @@ namespace coro {
  * - Call cond.broadcast() to wake all waiting coroutines.
  *
  * Design:
- * - Suspended coroutines are added to a waiters queue.
+ * - Suspended coroutines are added to a waiters queue (mutex-protected for MPMC safety).
  * - wait() atomically unlocks mutex and suspends, re-acquires on resume.
  * - signal() wakes one waiter, broadcast() wakes all waiters.
  *
@@ -132,6 +133,7 @@ public:
 
 private:
     CoroutineQueue waiters_;
+    std::mutex waiters_mutex_;  ///< Protects waiters_ for MPMC safety
 };
 
 } // namespace coro

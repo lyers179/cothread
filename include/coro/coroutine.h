@@ -19,6 +19,13 @@ template<typename T> class SafeTaskPromise;
 template<typename T> class Task;
 template<typename T> class TaskPromise;
 
+// Thread-local current coroutine meta (for yield/suspend operations)
+// Defined in scheduler.cpp, declared here for use in promise types
+extern thread_local CoroutineMeta* current_coro_meta_;
+
+// Get current coroutine's meta (returns nullptr if not in coroutine)
+inline CoroutineMeta* current_coro_meta() { return current_coro_meta_; }
+
 // Shared global frame pool for coroutine promise allocations
 inline FramePool& GetGlobalFramePool() {
     static FramePool pool;
@@ -49,12 +56,19 @@ public:
 
     void return_value(T value) {
         result_ = std::move(value);
-        if (awaiter_) awaiter_.resume();
+        if (awaiter_) {
+            // When resuming the awaiter (outer coroutine), restore the awaiter's
+            // CoroutineMeta context. This is needed for nested coroutines where
+            // the inner coroutine completes and resumes the outer coroutine.
+            ResumeAwaiter();
+        }
     }
 
     void unhandled_exception() {
         exception_ = std::current_exception();
-        if (awaiter_) awaiter_.resume();
+        if (awaiter_) {
+            ResumeAwaiter();
+        }
     }
 
     T get_result() {
@@ -62,15 +76,31 @@ public:
         return std::move(result_);
     }
 
-    void set_awaiter(std::coroutine_handle<> h) { awaiter_ = h; }
+    void set_awaiter(std::coroutine_handle<> h) {
+        awaiter_ = h;
+        // Capture the awaiter's CoroutineMeta context for proper nested resumption
+        awaiter_meta_ = current_coro_meta();
+    }
 
     void set_meta(CoroutineMeta* m) { meta_ = m; }
     CoroutineMeta* meta() const { return meta_; }
 
 private:
+    void ResumeAwaiter() {
+        // Swap to awaiter's CoroutineMeta context if available
+        CoroutineMeta* prev_meta = current_coro_meta();
+        if (awaiter_meta_) {
+            current_coro_meta_ = awaiter_meta_;
+        }
+        awaiter_.resume();
+        // Restore previous context (though this coroutine is completing)
+        current_coro_meta_ = prev_meta;
+    }
+
     T result_{};
     std::exception_ptr exception_;
     std::coroutine_handle<> awaiter_;
+    CoroutineMeta* awaiter_meta_{nullptr};  ///< Awaiter's CoroutineMeta for nested resumption
     CoroutineMeta* meta_{nullptr};
 };
 
@@ -96,6 +126,9 @@ public:
 
     bool is_done() const { return handle_ && handle_.done(); }
     std::coroutine_handle<promise_type> handle() const { return handle_; }
+
+    // Release ownership of the coroutine handle without destroying it
+    void release() { handle_ = nullptr; }
 
     T get() {
         if (!handle_) throw std::runtime_error("Task has no handle");
@@ -124,22 +157,43 @@ public:
     std::suspend_always initial_suspend() noexcept { return {}; }
     std::suspend_always final_suspend() noexcept { return {}; }
 
-    void return_void() { if (awaiter_) awaiter_.resume(); }
+    void return_void() {
+        if (awaiter_) {
+            ResumeAwaiter();
+        }
+    }
 
     void unhandled_exception() {
         exception_ = std::current_exception();
-        if (awaiter_) awaiter_.resume();
+        if (awaiter_) {
+            ResumeAwaiter();
+        }
     }
 
     void get_result() { if (exception_) std::rethrow_exception(exception_); }
-    void set_awaiter(std::coroutine_handle<> h) { awaiter_ = h; }
+
+    void set_awaiter(std::coroutine_handle<> h) {
+        awaiter_ = h;
+        // Capture the awaiter's CoroutineMeta context for proper nested resumption
+        awaiter_meta_ = current_coro_meta();
+    }
 
     void set_meta(CoroutineMeta* m) { meta_ = m; }
     CoroutineMeta* meta() const { return meta_; }
 
 private:
+    void ResumeAwaiter() {
+        CoroutineMeta* prev_meta = current_coro_meta();
+        if (awaiter_meta_) {
+            current_coro_meta_ = awaiter_meta_;
+        }
+        awaiter_.resume();
+        current_coro_meta_ = prev_meta;
+    }
+
     std::exception_ptr exception_;
     std::coroutine_handle<> awaiter_;
+    CoroutineMeta* awaiter_meta_{nullptr};
     CoroutineMeta* meta_{nullptr};
 };
 
@@ -165,6 +219,9 @@ public:
 
     bool is_done() const { return handle_ && handle_.done(); }
     std::coroutine_handle<promise_type> handle() const { return handle_; }
+
+    // Release ownership of the coroutine handle without destroying it
+    void release() { handle_ = nullptr; }
 
     void get() {
         if (!handle_) throw std::runtime_error("Task has no handle");
@@ -217,6 +274,9 @@ public:
     bool is_done() const { return handle_ && handle_.done(); }
     std::coroutine_handle<promise_type> handle() const { return handle_; }
 
+    // Release ownership of the coroutine handle without destroying it
+    void release() { handle_ = nullptr; }
+
     // Returns Result<T> instead of T - no exceptions thrown
     [[nodiscard]] coro::Result<T> get() {
         if (!handle_) {
@@ -261,13 +321,13 @@ public:
     // Accept value - creates Result<T> with success
     void return_value(T value) {
         result_ = coro::Result<T>(std::move(value));
-        if (awaiter_) awaiter_.resume();
+        if (awaiter_) ResumeAwaiter();
     }
 
     // Accept Error - creates Result<T> with error
     void return_value(coro::Error error) {
         result_ = coro::Result<T>(std::move(error));
-        if (awaiter_) awaiter_.resume();
+        if (awaiter_) ResumeAwaiter();
     }
 
     // Convert exceptions to Error
@@ -279,18 +339,32 @@ public:
         } catch (...) {
             result_ = coro::Result<T>(coro::Error(-4, "unknown exception"));
         }
-        if (awaiter_) awaiter_.resume();
+        if (awaiter_) ResumeAwaiter();
     }
 
     coro::Result<T> get_result() { return std::move(result_); }
-    void set_awaiter(std::coroutine_handle<> h) { awaiter_ = h; }
+
+    void set_awaiter(std::coroutine_handle<> h) {
+        awaiter_ = h;
+        awaiter_meta_ = current_coro_meta();
+    }
 
     void set_meta(CoroutineMeta* m) { meta_ = m; }
     CoroutineMeta* meta() const { return meta_; }
 
 private:
+    void ResumeAwaiter() {
+        CoroutineMeta* prev_meta = current_coro_meta();
+        if (awaiter_meta_) {
+            current_coro_meta_ = awaiter_meta_;
+        }
+        awaiter_.resume();
+        current_coro_meta_ = prev_meta;
+    }
+
     coro::Result<T> result_;
     std::coroutine_handle<> awaiter_;
+    CoroutineMeta* awaiter_meta_{nullptr};
     CoroutineMeta* meta_{nullptr};
 };
 
@@ -324,19 +398,19 @@ public:
     // Success case - co_return VoidSuccess{}; or co_return Result<void>();
     void return_value(VoidSuccess) {
         result_ = coro::Result<void>();
-        if (awaiter_) awaiter_.resume();
+        if (awaiter_) ResumeAwaiter();
     }
 
     // Also accept Result<void> directly
     void return_value(coro::Result<void> res) {
         result_ = std::move(res);
-        if (awaiter_) awaiter_.resume();
+        if (awaiter_) ResumeAwaiter();
     }
 
     // Error case - co_return Error(...);
     void return_value(coro::Error error) {
         result_ = coro::Result<void>(std::move(error));
-        if (awaiter_) awaiter_.resume();
+        if (awaiter_) ResumeAwaiter();
     }
 
     // Convert exceptions to Error
@@ -348,18 +422,32 @@ public:
         } catch (...) {
             result_ = coro::Result<void>(coro::Error(-4, "unknown exception"));
         }
-        if (awaiter_) awaiter_.resume();
+        if (awaiter_) ResumeAwaiter();
     }
 
     coro::Result<void> get_result() { return std::move(result_); }
-    void set_awaiter(std::coroutine_handle<> h) { awaiter_ = h; }
+
+    void set_awaiter(std::coroutine_handle<> h) {
+        awaiter_ = h;
+        awaiter_meta_ = current_coro_meta();
+    }
 
     void set_meta(CoroutineMeta* m) { meta_ = m; }
     CoroutineMeta* meta() const { return meta_; }
 
 private:
+    void ResumeAwaiter() {
+        CoroutineMeta* prev_meta = current_coro_meta();
+        if (awaiter_meta_) {
+            current_coro_meta_ = awaiter_meta_;
+        }
+        awaiter_.resume();
+        current_coro_meta_ = prev_meta;
+    }
+
     coro::Result<void> result_;
     std::coroutine_handle<> awaiter_;
+    CoroutineMeta* awaiter_meta_{nullptr};
     CoroutineMeta* meta_{nullptr};
 };
 
@@ -385,6 +473,9 @@ public:
 
     bool is_done() const { return handle_ && handle_.done(); }
     std::coroutine_handle<promise_type> handle() const { return handle_; }
+
+    // Release ownership of the coroutine handle without destroying it
+    void release() { handle_ = nullptr; }
 
     // Returns Result<void> - no exceptions thrown
     [[nodiscard]] coro::Result<void> get() {

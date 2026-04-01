@@ -10,6 +10,7 @@ CoMutex::CoMutex() = default;
 
 CoMutex::~CoMutex() {
     // Critical: Destroying mutex with pending waiters leaks coroutines
+    std::lock_guard<std::mutex> lock(waiters_mutex_);
     assert(waiters_.Empty() && "Cannot destroy mutex with pending waiters");
 }
 
@@ -53,8 +54,11 @@ bool CoMutex::LockAwaiter::await_suspend(std::coroutine_handle<> h) {
     meta->state.store(CoroutineMeta::SUSPENDED, std::memory_order_release);
     meta->waiting_sync = &mutex_;
 
-    // Add to waiters queue
-    mutex_.waiters_.Push(meta);
+    // Add to waiters queue (mutex-protected for MPMC safety)
+    {
+        std::lock_guard<std::mutex> lock(mutex_.waiters_mutex_);
+        mutex_.waiters_.Push(meta);
+    }
 
     return true;  // Suspend
 }
@@ -66,7 +70,12 @@ void CoMutex::unlock() {
 
     // Check if there are waiters before clearing LOCKED
     // This avoids the race condition: we transfer ownership atomically
-    CoroutineMeta* waiter = waiters_.Pop();
+    CoroutineMeta* waiter = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(waiters_mutex_);
+        waiter = waiters_.Pop();
+    }
+
     if (waiter) {
         // Transfer lock ownership directly to waiter WITHOUT clearing LOCKED
         // This is atomic handoff - no window for another thread to steal the lock

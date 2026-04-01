@@ -12,12 +12,6 @@
 
 namespace coro {
 
-// Thread-local current coroutine meta (for yield/suspend operations)
-extern thread_local CoroutineMeta* current_coro_meta_;
-
-// Get current coroutine's meta (returns nullptr if not in coroutine)
-inline CoroutineMeta* current_coro_meta() { return current_coro_meta_; }
-
 /**
  * @brief Coroutine scheduler implementing M:N threading model.
  *
@@ -135,8 +129,17 @@ SafeTask<T> co_spawn(SafeTask<T> task) {
 // co_spawn_detached - fire and forget
 template<typename T>
 void co_spawn_detached(Task<T> task) {
-    CoroutineScheduler::Instance().Spawn(std::move(task));
-    // Task runs without caller waiting - the scheduler owns it now
+    auto spawned = CoroutineScheduler::Instance().Spawn(std::move(task));
+    // Release ownership of the handle - the scheduler now owns the coroutine
+    // Without this, the returned Task's destructor would destroy the coroutine
+    spawned.release();
+}
+
+// co_spawn_detached for SafeTask
+template<typename T>
+void co_spawn_detached(SafeTask<T> task) {
+    auto spawned = CoroutineScheduler::Instance().Spawn(std::move(task));
+    spawned.release();
 }
 
 } // namespace coro

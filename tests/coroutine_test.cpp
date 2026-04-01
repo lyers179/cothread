@@ -699,9 +699,6 @@ coro::Task<void> mutex_contention_coro(coro::CoMutex& m, std::atomic<int>& count
 }
 
 void test_comutex_contention() {
-    std::cout << "test_comutex_contention SKIPPED (may cause hang in some cases)\n";
-    // TODO: Investigate why contention test can hang
-    /*
     coro::CoMutex mutex;
     std::atomic<int> counter{0};
     constexpr int ITERATIONS = 50;
@@ -723,7 +720,6 @@ void test_comutex_contention() {
     // Total increments should be NUM_COROS * ITERATIONS
     assert(counter.load() == NUM_COROS * ITERATIONS);
     std::cout << "test_comutex_contention PASSED\n";
-    */
 }
 
 coro::Task<int> mutex_nested_lock_coro(coro::CoMutex& m1, coro::CoMutex& m2, int& value) {
@@ -935,9 +931,6 @@ coro::Task<void> concurrent_signal_producer(coro::CoMutex& m, coro::CoCond& c, s
 }
 
 void test_cocond_concurrent_signal() {
-    std::cout << "test_cocond_concurrent_signal SKIPPED (concurrent spawns from multiple threads can cause race conditions)\n";
-    // TODO: Investigate thread safety of concurrent co_spawn from multiple threads
-    /*
     // Test that concurrent signal() calls from multiple threads are safe
     // and don't cause data races or crashes.
     // This is a stress test rather than a functional test - we just verify
@@ -985,7 +978,6 @@ void test_cocond_concurrent_signal() {
     // Verify all producers completed successfully
     assert(counter.load() == NUM_PRODUCERS);
     std::cout << "test_cocond_concurrent_signal PASSED\n";
-    */
 }
 
 // === Cancellation tests ===
@@ -1585,11 +1577,6 @@ coro::Task<int> nested_outer_coro() {
 }
 
 void test_nested_coroutines() {
-    std::cout << "test_nested_coroutines SKIPPED (nested co_spawn may have deadlock)\n";
-    // TODO: Fix nested coroutine support - co_await co_spawn() may cause deadlock
-    // The issue is that the outer coroutine blocks waiting for inner coroutine,
-    // but inner coroutine needs a worker thread to run.
-    /*
     auto task = coro::co_spawn(nested_outer_coro());
 
     while (!task.is_done()) {
@@ -1598,7 +1585,6 @@ void test_nested_coroutines() {
 
     assert(task.get() == 15);  // inner (10) + outer adds 5
     std::cout << "test_nested_coroutines PASSED\n";
-    */
 }
 
 // Deeply nested coroutines - multiple levels
@@ -1617,9 +1603,6 @@ coro::Task<int> deep_level1_coro() {
 }
 
 void test_deeply_nested_coroutines() {
-    std::cout << "test_deeply_nested_coroutines SKIPPED (nested co_spawn may have deadlock)\n";
-    // TODO: Fix nested coroutine support
-    /*
     auto task = coro::co_spawn(deep_level1_coro());
 
     while (!task.is_done()) {
@@ -1628,7 +1611,6 @@ void test_deeply_nested_coroutines() {
 
     assert(task.get() == 6);  // 1 + 2 + 3
     std::cout << "test_deeply_nested_coroutines PASSED\n";
-    */
 }
 
 // Detached coroutines - fire-and-forget
@@ -1641,9 +1623,6 @@ coro::Task<void> detached_worker_coro(int id) {
 }
 
 void test_detached_coroutines() {
-    std::cout << "test_detached_coroutines SKIPPED (may cause memory issues)\n";
-    // TODO: Fix detached coroutine memory management
-    /*
     detached_counter.store(0);
 
     // Spawn detached coroutines (fire-and-forget)
@@ -1661,7 +1640,6 @@ void test_detached_coroutines() {
 
     assert(detached_counter.load() == NUM_DETACHED);
     std::cout << "test_detached_coroutines PASSED\n";
-    */
 }
 
 // Detached coroutines with mutex - verify proper synchronization
@@ -1677,9 +1655,6 @@ coro::Task<void> detached_mutex_coro(coro::CoMutex& m, int iterations) {
 }
 
 void test_detached_coroutines_with_mutex() {
-    std::cout << "test_detached_coroutines_with_mutex SKIPPED (may cause memory issues)\n";
-    // TODO: Fix detached coroutine memory management
-    /*
     detached_mutex_counter.store(0);
     coro::CoMutex mutex;
     constexpr int NUM_DETACHED = 3;
@@ -1698,7 +1673,6 @@ void test_detached_coroutines_with_mutex() {
 
     assert(detached_mutex_counter.load() == NUM_DETACHED * ITERATIONS);
     std::cout << "test_detached_coroutines_with_mutex PASSED\n";
-    */
 }
 
 // Stress test with mixed operations
@@ -1730,9 +1704,6 @@ coro::Task<void> mixed_stress_waiter(coro::CoMutex& m, coro::CoCond& c,
 }
 
 void test_stress_mixed_operations() {
-    std::cout << "test_stress_mixed_operations SKIPPED (may cause issues with concurrent operations)\n";
-    // TODO: Fix concurrent operations test
-    /*
     // Simplified stress test - just verify concurrent mutex operations work
     coro::CoMutex mutex;
     coro::CoCond cond;
@@ -1771,7 +1742,6 @@ void test_stress_mixed_operations() {
 
     assert(counter.load() == TARGET);
     std::cout << "test_stress_mixed_operations PASSED\n";
-    */
 }
 
 int main() {
@@ -1881,8 +1851,8 @@ int main() {
     test_detached_coroutines_with_mutex();
     test_stress_mixed_operations();
 
-    // Final shutdown - skip for now to avoid issues
-    // coro::CoroutineScheduler::Instance().Shutdown();
+    // Final shutdown
+    coro::CoroutineScheduler::Instance().Shutdown();
 
     std::cout << "All tests PASSED!\n";
     return 0;

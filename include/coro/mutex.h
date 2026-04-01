@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <coroutine>
+#include <mutex>
 #include "coro/meta.h"
 
 namespace coro {
@@ -22,7 +23,7 @@ namespace coro {
  *
  * Design:
  * - Uses atomic state with LOCKED and HAS_WAITERS flags.
- * - Suspended coroutines are added to a waiters queue.
+ * - Suspended coroutines are added to a waiters queue (mutex-protected for MPMC safety).
  * - unlock() wakes one waiting coroutine and passes the lock to it.
  */
 class CoMutex {
@@ -94,6 +95,7 @@ private:
 
     std::atomic<uint32_t> state_{0};
     CoroutineQueue waiters_;
+    std::mutex waiters_mutex_;  ///< Protects waiters_ for MPMC safety
 };
 
 } // namespace coro

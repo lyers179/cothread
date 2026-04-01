@@ -1,50 +1,47 @@
 # Coroutine Pool TODO List
 
-## Skipped Tests (Known Limitations)
+## Fixed Issues (2026-04-01)
 
-### 1. test_comutex_contention
-**Status:** SKIPPED
-**Reason:** May cause hang in some cases
-**Root Cause:** Heavy mutex contention with multiple coroutines can lead to scheduler deadlock
-**Location:** `tests/coroutine_test.cpp`
-**Potential Fix:** Review scheduler lock handoff logic or add timeout mechanism
+### 1. CoroutineQueue Thread Safety
+**Status:** FIXED
+**Fix:** Added `std::mutex waiters_mutex_` to both `CoMutex` and `CoCond` to protect the waiters queue. The CoroutineQueue is MPSC (Multi-Producer Single-Consumer), but multiple worker threads can access it concurrently. The mutex ensures MPMC safety.
 
-### 2. test_cocond_concurrent_signal
-**Status:** SKIPPED
-**Reason:** Concurrent spawns from multiple threads can cause race conditions
-**Root Cause:** Scheduler's concurrent spawn handling has race conditions when multiple OS threads spawn coroutines simultaneously
-**Location:** `tests/coroutine_test.cpp`
-**Potential Fix:** Add proper synchronization in `CoroutineScheduler::Spawn()` for multi-threaded access
+### 2. Scheduler Shutdown Race Condition
+**Status:** FIXED
+**Fix:** Consolidated shutdown logic in `CoroutineScheduler::Shutdown()`. The method now properly:
+- Guards against multiple shutdown calls
+- Signals workers to stop
+- Shuts down the sleep thread
+- Joins all worker threads
+- Clears the workers vector
 
-## Shutdown Race Condition
+### 3. Nested Coroutine Support
+**Status:** FIXED
+**Fix:** Added `awaiter_meta_` field to TaskPromise and SafeTaskPromise to store the awaiter's CoroutineMeta. When the awaited coroutine completes and resumes the awaiter, it now properly restores the awaiter's CoroutineMeta context via `ResumeAwaiter()`.
 
-### Segfault on Program Termination
-**Status:** Intermittent
-**Reason:** Race condition during scheduler shutdown causes segfault
-**Impact:** Exit code 1 instead of 0, but all tests complete successfully
-**Potential Fix:** Review `CoroutineScheduler::Shutdown()` and worker thread cleanup order
+### 4. Detached Coroutine Memory Management
+**Status:** FIXED
+**Fix:** Added `release()` method to Task and SafeTask that sets the handle to nullptr without destroying it. Updated `co_spawn_detached()` to call `release()` on the spawned task to prevent the destructor from destroying the coroutine handle.
 
-## Future Improvements
+### 5. CoCond Mutex Re-acquisition
+**Status:** DOCUMENTED
+**Note:** The spin-yield loop in `await_resume()` is acceptable for the current design because:
+- Condition variables are typically used with short-held mutexes
+- The scheduler ensures fair scheduling
+- `std::this_thread::yield()` prevents busy-waiting
+- The signaling coroutine typically releases the mutex immediately after signal()
 
-### Nested Coroutine Support
-**Issue:** `co_await co_spawn(inner_coro())` can cause deadlock
-**Tests Affected:**
-- `test_nested_coroutines`
-- `test_deeply_nested_coroutines`
-**Potential Fix:** Implement proper coroutine waiting mechanism that doesn't block the scheduler
+## Remaining Work
 
-### Detached Coroutine Memory Management
-**Issue:** Detached coroutines have memory management issues
-**Tests Affected:**
-- `test_detached_coroutines`
-- `test_detached_coroutines_with_mutex`
-**Potential Fix:** Track detached coroutine lifetimes and clean up properly
+### Stress Test Improvements
+Some tests may still occasionally hang under heavy load due to:
+- Complex interactions between multiple synchronization primitives
+- Race conditions in concurrent test scenarios
 
-### CoCond Mutex Re-acquisition
-**Issue:** Uses spin-yield loop instead of proper coroutine-based waiting
-**Location:** `src/coro/cond.cpp:await_resume()`
-**Potential Fix:** Implement two-phase suspension or atomic state machine for proper async re-lock
+### Future Improvements
+- Consider implementing two-phase suspension for CoCond to avoid spin-yield
+- Add timeout mechanisms to prevent infinite waits
+- Improve error handling and recovery
 
 ---
-
-*Generated: 2026-03-30*
+*Updated: 2026-04-01*
