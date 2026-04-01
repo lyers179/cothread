@@ -124,7 +124,14 @@ int Butex::Wait(int expected_value, const platform::timespec* timeout, bool prep
         return platform::FutexWait(&value_, expected_value, timeout);
     }
 
-    TaskMeta* task = w->current_task();
+    // Get current task and cast to TaskMeta (Butex only works with bthread)
+    TaskMetaBase* base_task = w->current_task();
+    if (!base_task || base_task->type != TaskType::BTHREAD) {
+        // Not a bthread, use futex
+        return platform::FutexWait(&value_, expected_value, timeout);
+    }
+
+    TaskMeta* task = static_cast<TaskMeta*>(base_task);
 
     // 1. Check value first
     if (value_.load(std::memory_order_acquire) != expected_value) {

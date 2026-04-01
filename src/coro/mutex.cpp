@@ -51,7 +51,7 @@ bool CoMutex::LockAwaiter::await_suspend(std::coroutine_handle<> h) {
     }
 
     // Set state on existing meta
-    meta->state.store(CoroutineMeta::SUSPENDED, std::memory_order_release);
+    meta->state.store(bthread::TaskState::SUSPENDED, std::memory_order_release);
     meta->waiting_sync = &mutex_;
 
     // Add to waiters queue (mutex-protected for MPMC safety)
@@ -79,7 +79,7 @@ void CoMutex::unlock() {
     if (waiter) {
         // Transfer lock ownership directly to waiter WITHOUT clearing LOCKED
         // This is atomic handoff - no window for another thread to steal the lock
-        waiter->state.store(CoroutineMeta::READY, std::memory_order_release);
+        waiter->state.store(bthread::TaskState::READY, std::memory_order_release);
         waiter->waiting_sync = nullptr;
 
         CoroutineScheduler::Instance().EnqueueCoroutine(waiter);

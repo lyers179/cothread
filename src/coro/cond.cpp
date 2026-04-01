@@ -25,7 +25,7 @@ bool CoCond::WaitAwaiter::await_suspend(std::coroutine_handle<> h) {
     }
 
     // Set state on existing meta
-    meta_->state.store(CoroutineMeta::SUSPENDED, std::memory_order_release);
+    meta_->state.store(bthread::TaskState::SUSPENDED, std::memory_order_release);
     meta_->waiting_sync = &cond_;
 
     // Unlock mutex before waiting (this is the core of condition variable semantics)
@@ -70,7 +70,7 @@ void CoCond::signal() {
     }
 
     if (waiter) {
-        waiter->state.store(CoroutineMeta::READY, std::memory_order_release);
+        waiter->state.store(bthread::TaskState::READY, std::memory_order_release);
         waiter->waiting_sync = nullptr;
         CoroutineScheduler::Instance().EnqueueCoroutine(waiter);
     }
@@ -90,7 +90,7 @@ void CoCond::broadcast() {
 
     // Wake all outside the lock to avoid holding lock during EnqueueCoroutine
     for (CoroutineMeta* waiter : to_wake) {
-        waiter->state.store(CoroutineMeta::READY, std::memory_order_release);
+        waiter->state.store(bthread::TaskState::READY, std::memory_order_release);
         waiter->waiting_sync = nullptr;
         CoroutineScheduler::Instance().EnqueueCoroutine(waiter);
     }

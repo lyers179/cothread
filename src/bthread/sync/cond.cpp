@@ -7,7 +7,15 @@
 #include "coro/meta.h"
 
 #ifdef _WIN32
+// Ensure Windows API functions are available
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
+#include <synchapi.h>
 #else
 #include <pthread.h>
 #endif
@@ -72,10 +80,11 @@ void CondVar::wait(Mutex& mutex) {
 
 void CondVar::wait_pthread(Mutex& mutex) {
 #ifdef _WIN32
-    SleepConditionVariableSRW(
-        static_cast<CONDITION_VARIABLE*>(native_cond_),
-        static_cast<SRWLOCK*>(mutex.native_mutex_),
-        INFINITE);
+    // Use Windows native API
+    PCONDITION_VARIABLE pcond = (PCONDITION_VARIABLE)native_cond_;
+    PSRWLOCK plock = (PSRWLOCK)mutex.native_mutex_;
+    // SleepConditionVariableSRW takes 4 parameters (Flags must be 0)
+    SleepConditionVariableSRW(pcond, plock, INFINITE, 0);
 #else
     pthread_cond_wait(
         static_cast<pthread_cond_t*>(native_cond_),
@@ -96,10 +105,11 @@ bool CondVar::wait_for(Mutex& mutex, std::chrono::milliseconds timeout) {
         // Called from pthread
 #ifdef _WIN32
         DWORD ms = static_cast<DWORD>(timeout.count());
-        return SleepConditionVariableSRW(
-            static_cast<CONDITION_VARIABLE*>(native_cond_),
-            static_cast<SRWLOCK*>(mutex.native_mutex_),
-            ms) != FALSE;
+        PCONDITION_VARIABLE pcond = (PCONDITION_VARIABLE)native_cond_;
+        PSRWLOCK plock = (PSRWLOCK)mutex.native_mutex_;
+        // SleepConditionVariableSRW takes 4 parameters (Flags must be 0)
+        BOOL result = SleepConditionVariableSRW(pcond, plock, ms, 0);
+        return result != FALSE;
 #else
         struct timespec ts;
         clock_gettime(CLOCK_REALTIME, &ts);
@@ -197,7 +207,7 @@ bool CondVar::WaitAwaiter::await_suspend(std::coroutine_handle<> h) {
     mutex_.unlock();
 
     // Add to waiters
-    meta->state.store(coro::CoroutineMeta::State::SUSPENDED, std::memory_order_release);
+    meta->state.store(bthread::TaskState::SUSPENDED, std::memory_order_release);
     meta->waiting_sync = &cond_;
     cond_.enqueue_waiter(meta);
 

@@ -9,11 +9,7 @@
 #include <thread>
 #include "coro/meta.h"
 #include "coro/coroutine.h"
-
-// Forward declaration - unified scheduler
-namespace bthread {
-class Scheduler;
-}
+#include "bthread/scheduler.h"  // Include full definition for Spawn()
 
 namespace coro {
 

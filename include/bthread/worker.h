@@ -9,10 +9,17 @@
 #include "bthread/work_stealing_queue.h"
 #include "bthread/platform/platform.h"
 
-namespace bthread {
-
 // Forward declarations
+namespace bthread {
 class Scheduler;
+struct TaskMeta;
+}
+
+namespace coro {
+struct CoroutineMeta;
+}
+
+namespace bthread {
 
 /**
  * @brief Worker represents a pthread worker thread that executes both bthread and coroutine tasks.

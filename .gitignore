@@ -5,6 +5,8 @@
 build/
 build*
 
+pkg
+
 # IDE
 .vs/
 .vscode/

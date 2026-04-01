@@ -113,6 +113,7 @@ public:
     void EnqueueTask(TaskMeta* task);
 
     // ========== Coroutine Support ==========
+    // Template implementations are in scheduler.cpp
 
     /**
      * @brief Spawn a coroutine task for execution.
@@ -158,47 +159,5 @@ private:
     std::atomic<bool> running_{false};
     std::once_flag init_once_;
 };
-
-// ========== Coroutine Spawn Functions (namespace coro) ==========
-
-namespace coro {
-
-/**
- * @brief Spawn a coroutine task for execution by the unified scheduler.
- * Thread-safe: Can be called from any thread concurrently.
- * Auto-initializes the scheduler if not already initialized.
- */
-template<typename T>
-Task<T> co_spawn(Task<T> task) {
-    return Scheduler::Instance().Spawn(std::move(task));
-}
-
-/**
- * @brief Spawn a SafeTask coroutine for execution.
- */
-template<typename T>
-SafeTask<T> co_spawn(SafeTask<T> task) {
-    return Scheduler::Instance().Spawn(std::move(task));
-}
-
-/**
- * @brief Spawn a detached coroutine (fire and forget).
- */
-template<typename T>
-void co_spawn_detached(Task<T> task) {
-    auto spawned = Scheduler::Instance().Spawn(std::move(task));
-    spawned.release();
-}
-
-/**
- * @brief Spawn a detached SafeTask coroutine.
- */
-template<typename T>
-void co_spawn_detached(SafeTask<T> task) {
-    auto spawned = Scheduler::Instance().Spawn(std::move(task));
-    spawned.release();
-}
-
-} // namespace coro
 
 } // namespace bthread

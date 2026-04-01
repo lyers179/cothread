@@ -40,7 +40,7 @@ void StartSleepThread() {
             // Wake up all coroutines whose wake time has passed
             while (it != sleep_queue_.end() && it->first <= now) {
                 CoroutineMeta* meta = it->second;
-                meta->state.store(CoroutineMeta::State::READY, std::memory_order_release);
+                meta->state.store(bthread::TaskState::READY, std::memory_order_release);
                 // Enqueue to unified scheduler
                 bthread::Scheduler::Instance().Submit(meta);
                 it = sleep_queue_.erase(it);
@@ -67,7 +67,7 @@ bool SleepAwaiter::await_suspend(std::coroutine_handle<> h) noexcept {
         return false;
     }
 
-    meta->state.store(CoroutineMeta::State::SUSPENDED, std::memory_order_release);
+    meta->state.store(bthread::TaskState::SUSPENDED, std::memory_order_release);
 
     // Calculate wake time
     auto wake_time = std::chrono::steady_clock::now() + duration_;
@@ -93,7 +93,7 @@ bool YieldAwaiter::await_suspend(std::coroutine_handle<> h) noexcept {
     }
 
     // Re-queue the coroutine for later execution
-    meta->state.store(CoroutineMeta::State::READY, std::memory_order_release);
+    meta->state.store(bthread::TaskState::READY, std::memory_order_release);
     bthread::Scheduler::Instance().Submit(meta);
 
     return true;  // Suspend
@@ -146,10 +146,10 @@ void CoroutineScheduler::EnqueueCoroutine(CoroutineMeta* meta) {
 CoroutineMeta* CoroutineScheduler::AllocMeta() {
     std::lock_guard<std::mutex> lock(meta_mutex_);
     for (auto& meta : meta_pool_) {
-        if (meta->state.load(std::memory_order_acquire) == CoroutineMeta::State::FINISHED ||
+        if (meta->state.load(std::memory_order_acquire) == bthread::TaskState::FINISHED ||
             meta->handle == nullptr) {
             // Reset meta
-            meta->state.store(CoroutineMeta::State::READY, std::memory_order_release);
+            meta->state.store(bthread::TaskState::READY, std::memory_order_release);
             meta->cancel_requested.store(false, std::memory_order_relaxed);
             meta->waiting_sync = nullptr;
             meta->next.store(nullptr, std::memory_order_relaxed);
@@ -167,7 +167,7 @@ CoroutineMeta* CoroutineScheduler::AllocMeta() {
 void CoroutineScheduler::FreeMeta(CoroutineMeta* meta) {
     // Acquire lock to synchronize with AllocMeta's handle check
     std::lock_guard<std::mutex> lock(meta_mutex_);
-    meta->state.store(CoroutineMeta::State::FINISHED, std::memory_order_release);
+    meta->state.store(bthread::TaskState::FINISHED, std::memory_order_release);
     meta->handle = nullptr;
 }
 

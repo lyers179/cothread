@@ -1,5 +1,6 @@
 #include "bthread.h"
 #include "bthread/work_stealing_queue.h"
+#include "bthread/task_meta.h"
 
 #include <cstdio>
 #include <cassert>
@@ -24,7 +25,7 @@ int main() {
     q.Push(&t3);
 
     // Test Pop (LIFO for owner)
-    TaskMeta* popped = q.Pop();
+    TaskMetaBase* popped = q.Pop();
     assert(popped == &t3);
 
     popped = q.Pop();
@@ -43,7 +44,7 @@ int main() {
     q.Push(&t1);
 
     std::thread stealer([&]() {
-        TaskMeta* stolen = q.Steal();
+        TaskMetaBase* stolen = q.Steal();
         assert(stolen == &t1);
     });
 

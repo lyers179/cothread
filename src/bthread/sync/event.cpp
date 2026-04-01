@@ -157,7 +157,7 @@ bool Event::WaitAwaiter::await_suspend(std::coroutine_handle<> h) {
         return false;
     }
 
-    meta->state.store(coro::CoroutineMeta::State::SUSPENDED, std::memory_order_release);
+    meta->state.store(bthread::TaskState::SUSPENDED, std::memory_order_release);
     meta->waiting_sync = &event_;
     event_.enqueue_waiter(meta);
 

@@ -124,8 +124,11 @@ private:
     // Native mutex for pthread context
     void* native_mutex_{nullptr};
 
-    // Butex for bthread context
-    void* butex_{nullptr};
+    // Butex for bthread context (atomic for lock-free init)
+    std::atomic<void*> butex_{nullptr};
+
+    // Friend classes for private access
+    friend class CondVar;
 
     // Helper methods
     void lock_bthread();

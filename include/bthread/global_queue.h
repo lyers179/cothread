@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <thread>
 
 #include "bthread/core/task_meta_base.hpp"
 

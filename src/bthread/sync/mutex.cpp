@@ -34,7 +34,7 @@ Mutex::~Mutex() {
     }
 
     if (butex_) {
-        delete static_cast<Butex*>(butex_);
+        delete static_cast<Butex*>(butex_.load(std::memory_order_relaxed));
     }
 
     if (native_mutex_) {
@@ -68,11 +68,13 @@ void Mutex::lock_bthread() {
     }
 
     // Create butex if needed
-    if (!butex_) {
+    if (!butex_.load(std::memory_order_acquire)) {
         Butex* new_butex = new Butex();
-        void* expected_butex = nullptr;
-        if (!__atomic_compare_exchange_n(&butex_, &expected_butex, new_butex,
-                false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+        void* expected = nullptr;
+        if (butex_.compare_exchange_strong(expected, new_butex,
+                std::memory_order_acq_rel, std::memory_order_acquire)) {
+            // Successfully set
+        } else {
             delete new_butex;
         }
     }
@@ -104,7 +106,7 @@ void Mutex::lock_bthread() {
         }
 
         // Wait on butex
-        Butex* butex = static_cast<Butex*>(butex_);
+        Butex* butex = static_cast<Butex*>(butex_.load(std::memory_order_acquire));
         int generation = butex->value();
 
         // Double-check lock state
@@ -158,8 +160,8 @@ void Mutex::unlock() {
 
     if (old_state & HAS_WAITERS) {
         // Wake one bthread waiter via butex
-        if (butex_) {
-            Butex* butex = static_cast<Butex*>(butex_);
+        Butex* butex = static_cast<Butex*>(butex_.load(std::memory_order_acquire));
+        if (butex) {
             butex->set_value(butex->value() + 1);
             butex->Wake(1);
         }
@@ -222,7 +224,7 @@ bool Mutex::LockAwaiter::await_suspend(std::coroutine_handle<> h) {
     }
 
     // Suspend coroutine
-    meta->state.store(coro::CoroutineMeta::State::SUSPENDED, std::memory_order_release);
+    meta->state.store(bthread::TaskState::SUSPENDED, std::memory_order_release);
     meta->waiting_sync = &mutex_;
 
     mutex_.enqueue_waiter(meta);

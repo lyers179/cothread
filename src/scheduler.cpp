@@ -4,6 +4,7 @@
 #include "bthread/butex.h"
 #include "bthread/platform/platform.h"
 #include "coro/meta.h"
+#include "coro/coroutine.h"
 
 #include <thread>
 
@@ -134,14 +135,10 @@ coro::Task<T> Scheduler::Spawn(coro::Task<T> task) {
         Init();
     }
 
-    // Allocate CoroutineMeta (use existing coroutine infrastructure)
-    // For now, delegate to the existing CoroutineScheduler
-    // This will be unified in a future phase
-
-    // Submit the coroutine task
+    // Allocate CoroutineMeta
     coro::CoroutineMeta* meta = new coro::CoroutineMeta();
     meta->handle = task.handle();
-    meta->state.store(coro::CoroutineMeta::State::READY, std::memory_order_release);
+    meta->state.store(TaskState::READY, std::memory_order_release);
 
     // Store CoroutineMeta in promise
     task.handle().promise().set_meta(meta);
@@ -160,7 +157,7 @@ coro::SafeTask<T> Scheduler::Spawn(coro::SafeTask<T> task) {
     // Similar to Task<T> spawning
     coro::CoroutineMeta* meta = new coro::CoroutineMeta();
     meta->handle = task.handle();
-    meta->state.store(coro::CoroutineMeta::State::READY, std::memory_order_release);
+    meta->state.store(TaskState::READY, std::memory_order_release);
 
     task.handle().promise().set_meta(meta);
 

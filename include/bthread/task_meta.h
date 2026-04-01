@@ -12,6 +12,7 @@ namespace bthread {
 
 // Forward declarations
 class Worker;
+struct TaskMeta;  // Forward declare for WaiterState
 
 // bthread handle type (legacy compatibility)
 using bthread_t = uint64_t;
@@ -61,7 +62,11 @@ struct TaskMeta : TaskMetaBase {
     std::atomic<int> join_waiters{0};
 
     // ========== Butex Wait State (bthread-specific) ==========
+    void* waiting_butex{nullptr};  ///< Butex pointer if waiting on one
     WaiterState waiter;
+
+    // ========== Worker Affinity (bthread-specific) ==========
+    Worker* local_worker{nullptr};  ///< Worker affinity for task execution
 
     // ========== Legacy Next Pointer (bthread-specific) ==========
     /// Used for bthread-specific linked lists (e.g., Butex wait queue)

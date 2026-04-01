@@ -115,6 +115,7 @@ set(CORO_SOURCES
 
 add_library(coro STATIC ${CORO_SOURCES})
 target_include_directories(coro PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(coro PUBLIC bthread)
 
 # Tests
 enable_testing()

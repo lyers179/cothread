@@ -13,7 +13,7 @@ bool YieldAwaiter::await_suspend(std::coroutine_handle<> h) noexcept {
     CoroutineMeta* meta = current_coro_meta();
     if (meta) {
         // Set state to READY and re-queue for execution
-        meta->state.store(CoroutineMeta::READY, std::memory_order_release);
+        meta->state.store(bthread::TaskState::READY, std::memory_order_release);
         CoroutineScheduler::Instance().EnqueueCoroutine(meta);
         return true;  // Suspend the coroutine
     }

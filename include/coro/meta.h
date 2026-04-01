@@ -26,6 +26,15 @@ struct CoroutineMeta : bthread::TaskMetaBase {
         type = bthread::TaskType::COROUTINE;
     }
 
+    // ========== Legacy State Enum (for backward compatibility) ==========
+    // These map to TaskState from TaskMetaBase
+    enum State : uint8_t {
+        READY = static_cast<uint8_t>(bthread::TaskState::READY),
+        RUNNING = static_cast<uint8_t>(bthread::TaskState::RUNNING),
+        SUSPENDED = static_cast<uint8_t>(bthread::TaskState::SUSPENDED),
+        FINISHED = static_cast<uint8_t>(bthread::TaskState::FINISHED)
+    };
+
     // ========== Coroutine Handle (coroutine-specific) ==========
     std::coroutine_handle<> handle;
 
@@ -39,6 +48,9 @@ struct CoroutineMeta : bthread::TaskMetaBase {
         }
     }
 };
+
+// Get current coroutine's meta (returns nullptr if not in coroutine)
+CoroutineMeta* current_coro_meta();
 
 /**
  * @brief Intrusive MPSC (Multi-Producer Single-Consumer) queue for coroutines.

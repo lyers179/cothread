@@ -196,7 +196,7 @@ void test_coroutine_queue_multi() {
 
 void test_coroutine_meta_state() {
     coro::CoroutineMeta meta;
-    assert(meta.state.load() == coro::CoroutineMeta::READY);
+    assert(meta.state.load() == bthread::TaskState::READY);
     assert(meta.owner_worker == nullptr);
     assert(meta.cancel_requested.load() == false);
     assert(meta.waiting_sync == nullptr);
@@ -205,14 +205,14 @@ void test_coroutine_meta_state() {
     assert(meta.generation == 0);
 
     // Test state transitions (atomic operations)
-    meta.state.store(coro::CoroutineMeta::RUNNING);
-    assert(meta.state.load() == coro::CoroutineMeta::RUNNING);
+    meta.state.store(bthread::TaskState::RUNNING);
+    assert(meta.state.load() == bthread::TaskState::RUNNING);
 
-    meta.state.store(coro::CoroutineMeta::SUSPENDED);
-    assert(meta.state.load() == coro::CoroutineMeta::SUSPENDED);
+    meta.state.store(bthread::TaskState::SUSPENDED);
+    assert(meta.state.load() == bthread::TaskState::SUSPENDED);
 
-    meta.state.store(coro::CoroutineMeta::FINISHED);
-    assert(meta.state.load() == coro::CoroutineMeta::FINISHED);
+    meta.state.store(bthread::TaskState::FINISHED);
+    assert(meta.state.load() == bthread::TaskState::FINISHED);
 
     std::cout << "test_coroutine_meta_state PASSED\n";
 }

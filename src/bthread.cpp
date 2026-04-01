@@ -95,12 +95,15 @@ int bthread_join(bthread_t tid, void** retval) {
 
     // Check if trying to join self
     Worker* w = Worker::Current();
-    if (w && w->current_task() == task) {
-        return EDEADLK;
+    if (w) {
+        TaskMetaBase* current = w->current_task();
+        if (current && current->type == TaskType::BTHREAD &&
+            static_cast<TaskMeta*>(current) == task) {
+            return EDEADLK;
+        }
     }
 
     // Capture generation BEFORE checking state to avoid race condition
-    // If task finishes between our state check and Wait, we need to detect it
     Butex* join_butex = static_cast<Butex*>(task->join_butex);
     int generation = join_butex->value();
 
@@ -141,10 +144,14 @@ int bthread_detach(bthread_t tid) {
 
 bthread_t bthread_self(void) {
     Worker* w = Worker::Current();
-    if (!w || !w->current_task()) {
+    if (!w) return 0;
+
+    TaskMetaBase* base_task = w->current_task();
+    if (!base_task || base_task->type != TaskType::BTHREAD) {
         return 0;  // Not in a bthread
     }
-    TaskMeta* task = w->current_task();
+
+    TaskMeta* task = static_cast<TaskMeta*>(base_task);
     return GetTaskGroup().EncodeId(task->slot_index, task->generation);
 }
 
@@ -161,18 +168,16 @@ int bthread_yield(void) {
 
 void bthread_exit(void* retval) {
     Worker* w = Worker::Current();
-    if (!w || !w->current_task()) {
-        // Called from pthread - just return
+    if (!w) return;
+
+    TaskMetaBase* base_task = w->current_task();
+    if (!base_task || base_task->type != TaskType::BTHREAD) {
         return;
     }
 
-    TaskMeta* task = w->current_task();
+    TaskMeta* task = static_cast<TaskMeta*>(base_task);
     task->result = retval;
     task->state.store(TaskState::FINISHED, std::memory_order_release);
-
-    // DO NOT release here - let HandleFinishedTask do it
-    // The ref_count will be decremented when the worker handles the finished task
-    // This ensures the TaskMeta is still valid during context switch
 
     // Switch back to scheduler (never returns)
     w->SuspendCurrent();

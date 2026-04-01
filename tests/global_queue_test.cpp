@@ -1,5 +1,6 @@
 #include "bthread.h"
 #include "bthread/global_queue.h"
+#include "bthread/task_meta.h"
 
 #include <cstdio>
 #include <cassert>
@@ -23,7 +24,7 @@ int main() {
     q.Push(&t3);
 
     // Test Pop (LIFO order - pops from head)
-    TaskMeta* head = q.Pop();
+    TaskMetaBase* head = q.Pop();
     assert(head != nullptr);
     // LIFO: t3 was pushed last, so it's popped first
     assert(head == &t3);
