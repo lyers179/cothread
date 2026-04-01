@@ -111,12 +111,15 @@ Demo 展示以下功能:
 
 | 测试 | 吞吐量 | 延迟 |
 |------|--------|------|
-| Create/Join | 620K ops/sec | 1.61 us/op |
-| Yield | 65.4M yields/sec | 15.29 ns/yield |
-| Mutex | 4.1M lock/unlock/sec | 0.24 us/op |
-| Stack | 551K ops/sec | - |
-| Producer-Consumer | 1.7M items/sec | - |
+| Create/Join | ~40K ops/sec | ~25 us/op |
+| Yield | ~35M yields/sec | ~28 ns/yield |
+| Mutex | ~6M lock/unlock/sec | ~0.17 us/op |
 
 ### 与 std::thread 对比
 
-bthread 比 std::thread **快 21 倍**，得益于用户态上下文切换避免内核态切换开销。
+bthread 比 std::thread **快 20-70 倍**，得益于用户态上下文切换避免内核态切换开销。
+
+### 已知问题
+
+Shutdown 偶发性挂起：由于 worker 停止检测的竞态条件，约 90% 的测试能正常完成。
+后续可通过更精细的内存同步或参考官方 bthread 的 ParkingLot 实现来改进。
