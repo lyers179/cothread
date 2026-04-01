@@ -77,36 +77,69 @@ void Worker::Run() {
 
 ## Synchronization Primitives
 
+All synchronization primitives are unified in `include/bthread/sync/`, supporting both bthread and coroutines.
+
 ### Mutex (include/bthread/sync/mutex.hpp)
 
 Unified mutex with dual-mode locking:
 
-- `lock()` / `unlock()`: Blocking operations for bthread/pthread
-- `lock_async()`: Returns awaiter for coroutines
-- `try_lock()`: Non-blocking attempt
+```cpp
+class Mutex {
+public:
+    void lock();           // Blocking for bthread/pthread context
+    LockAwaiter lock_async();  // Awaitable for coroutine context
+    bool try_lock();       // Non-blocking attempt
+    void unlock();         // Release lock
+};
+```
 
-Implementation:
-- Uses `Butex` for bthread waiting (futex-based)
-- Uses `SRWLOCK`/`pthread_mutex` for pthread waiting
-- Waiter queue for coroutine waiting
+Implementation details:
+- From bthread: Uses `Butex` for waiting (futex-based)
+- From pthread: Uses native mutex (`SRWLOCK` on Windows, `pthread_mutex` on Linux)
+- From coroutine: Uses waiter queue (FIFO fairness)
+
+Key files:
+- Header: [mutex.hpp](include/bthread/sync/mutex.hpp)
+- Implementation: [mutex.cpp](src/bthread/sync/mutex.cpp)
 
 ### CondVar (include/bthread/sync/cond.hpp)
 
 Unified condition variable:
 
-- `wait(Mutex&)`: Blocking wait
-- `wait_async(Mutex&)`: Awaitable wait
-- `wait_for()`: Timed wait
-- `notify_one()` / `notify_all()`: Wake waiters
+```cpp
+class CondVar {
+public:
+    void wait(Mutex& mutex);               // Blocking wait
+    WaitAwaiter wait_async(Mutex& mutex);  // Awaitable wait
+    bool wait_for(Mutex&, Duration);       // Timed wait
+    void notify_one();                     // Wake one waiter
+    void notify_all();                     // Wake all waiters
+};
+```
+
+Key files:
+- Header: [cond.hpp](include/bthread/sync/cond.hpp)
+- Implementation: [cond.cpp](src/bthread/sync/cond.cpp)
 
 ### Event (include/bthread/sync/event.hpp)
 
 Simple binary event:
 
-- `wait()` / `wait_async()`: Wait for event
-- `set()`: Wake all waiters
-- `reset()`: Clear event
-- Auto-reset mode support
+```cpp
+class Event {
+public:
+    void wait();               // Blocking wait
+    WaitAwaiter wait_async();  // Awaitable wait
+    bool wait_for(Duration);   // Timed wait
+    void set();                // Wake all waiters
+    void reset();              // Clear event
+    bool is_set() const;       // Check state
+};
+```
+
+Key files:
+- Header: [event.hpp](include/bthread/sync/event.hpp)
+- Implementation: [event.cpp](src/bthread/sync/event.cpp)
 
 ## Task Queues
 

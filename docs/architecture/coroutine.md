@@ -160,9 +160,9 @@ co_spawn(task)
                             └─> meta->handle.resume()
 ```
 
-## 同步原语
+## 统一同步原语
 
-协程可以使用统一的同步原语，与 bthread 兼容：
+协程使用统一的 `bthread::Mutex` 和 `bthread::CondVar`，与 bthread 完全兼容：
 
 ### Mutex（统一互斥锁）
 
@@ -199,20 +199,6 @@ co_await event.wait_async();
 
 // 从 bthread
 event.wait();
-```
-
-### 向后兼容：CoMutex / CoCond
-
-旧的协程专用同步原语仍然可用，但建议迁移到统一版本：
-
-```cpp
-// 旧 API（仍可用）
-coro::CoMutex comutex;
-co_await comutex.lock();
-
-// 新 API（推荐）
-bthread::Mutex mutex;
-co_await mutex.lock_async();
 ```
 
 ## 控制函数
@@ -284,19 +270,25 @@ include/coro/
   ├── coroutine.h      # Task<T>, SafeTask<T>, yield(), sleep()
   ├── scheduler.h      # co_spawn, 委托给 bthread::Scheduler
   ├── meta.h           # CoroutineMeta : TaskMetaBase
-  ├── mutex.h          # CoMutex（向后兼容）
-  ├── cond.h           # CoCond（向后兼容）
   ├── cancel.h         # CancellationToken, CancelSource
   ├── result.h         # Result<T>, Error
   └── frame_pool.h     # FramePool
 
+include/bthread/sync/
+  ├── mutex.hpp        # 统一互斥锁 (lock() + lock_async())
+  ├── cond.hpp         # 统一条件变量 (wait() + wait_async())
+  └── event.hpp        # 统一事件
+
 src/coro/
   ├── coroutine.cpp    # yield(), sleep() 实现
   ├── scheduler.cpp    # Timer 线程，委托给 Scheduler
-  ├── mutex.cpp        # CoMutex 实现
-  ├── cond.cpp         # CoCond 实现
   ├── cancel.cpp       # 取消机制实现
   └── frame_pool.cpp   # 帧池实现
+
+src/bthread/sync/
+  ├── mutex.cpp        # 统一 Mutex 实现
+  ├── cond.cpp         # 统一 CondVar 实现
+  └── event.cpp        # 统一 Event 实现
 ```
 
 ## 与 bthread 的关系
@@ -324,18 +316,6 @@ bthread::Scheduler::Instance().Init();
 bthread::Scheduler::Instance().Spawn(task);
 // 或者
 coro::co_spawn(task);  // 自动使用统一调度器
-```
-
-### 从 CoMutex 迁移到 Mutex
-
-```cpp
-// 旧代码
-coro::CoMutex mutex;
-co_await mutex.lock();
-
-// 新代码
-bthread::Mutex mutex;
-co_await mutex.lock_async();
 ```
 
 ## 已知限制

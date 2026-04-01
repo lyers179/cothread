@@ -275,44 +275,63 @@ Worker::Run()
 
 ## 统一同步原语
 
+所有同步原语位于 `include/bthread/sync/` 目录，同时支持 bthread 和协程：
+
 ### Mutex（统一互斥锁）
+
+位于 `include/bthread/sync/mutex.hpp`，实现文件 `src/bthread/sync/mutex.cpp`。
 
 ```cpp
 class Mutex {
 public:
     void lock();           // 阻塞锁（bthread/pthread）
     LockAwaiter lock_async();  // awaitable 锁（协程）
-    bool try_lock();
-    void unlock();
+    bool try_lock();       // 非阻塞尝试
+    void unlock();         // 释放锁
 
 private:
-    std::atomic<uint32_t> state_{0};
-    std::atomic<void*> butex_{nullptr};  // bthread 等待
-    WaiterNode* waiter_head_{nullptr};    // 协程等待
+    std::atomic<uint32_t> state_{0};     // 锁状态（LOCKED, HAS_WAITERS）
+    std::atomic<void*> butex_{nullptr};  // bthread 等待（futex）
+    std::mutex waiters_mutex_;           // 协程等待队列保护
+    WaiterNode* waiter_head_{nullptr};   // 协程等待队列头
+    WaiterNode* waiter_tail_{nullptr};   // 协程等待队列尾
+    void* native_mutex_;                 // pthread 等待（SRWLOCK/pthread_mutex）
 };
 ```
 
+**关键实现点：**
+- 从 bthread 调用 `lock()`：使用 Butex 等待（futex-based）
+- 从 pthread 调用 `lock()`：使用 native mutex（SRWLOCK/pthread_mutex）
+- 从协程调用 `lock_async()`：使用协程等待队列
+
 ### CondVar（统一条件变量）
+
+位于 `include/bthread/sync/cond.hpp`，实现文件 `src/bthread/sync/cond.cpp`。
 
 ```cpp
 class CondVar {
 public:
     void wait(Mutex& mutex);               // 阻塞等待
     WaitAwaiter wait_async(Mutex& mutex);  // awaitable 等待
-    void notify_one();
-    void notify_all();
+    bool wait_for(Mutex& mutex, Duration timeout);  // 超时等待
+    void notify_one();                     // 唤醒一个
+    void notify_all();                     // 唤醒全部
 };
 ```
 
 ### Event（统一事件）
+
+位于 `include/bthread/sync/event.hpp`，实现文件 `src/bthread/sync/event.cpp`。
 
 ```cpp
 class Event {
 public:
     void wait();               // 阻塞等待
     WaitAwaiter wait_async();  // awaitable 等待
-    void set();                // 设置事件
+    bool wait_for(Duration timeout);  // 超时等待
+    void set();                // 设置并唤醒所有等待者
     void reset();              // 重置事件
+    bool is_set() const;       // 检查状态
 };
 ```
 
@@ -352,10 +371,26 @@ include/bthread/
 include/coro/
 ├── meta.h                  # CoroutineMeta 定义
 ├── coroutine.h             # Task<T>, SafeTask<T>
-└── scheduler.h             # 协程包装（委托给 Scheduler）
+├── scheduler.h             # 协程包装（委托给 Scheduler）
+├── cancel.h                # CancellationToken
+├── result.h                # Result<T>, Error
+└── frame_pool.h            # FramePool
 
-src/
-├── scheduler.cpp           # 统一调度器实现
-├── worker.cpp              # Worker 实现
-└── ...
+src/bthread/
+├── core/
+│   ├── scheduler.cpp       # 统一调度器实现
+│   ├── worker.cpp          # Worker 实现
+│   ├── task.cpp            # Task API 实现
+│   └── coro_support.cpp    # current_coro_meta() 定义
+├── sync/
+│   ├── mutex.cpp           # 统一 Mutex 实现
+│   ├── cond.cpp            # 统一 CondVar 实现
+│   └── event.cpp           # 统一 Event 实现
+└── ...                     # 其他核心组件
+
+src/coro/
+├── coroutine.cpp           # yield(), sleep() 实现
+├── scheduler.cpp           # Timer 线程，委托给 Scheduler
+├── cancel.cpp              # 取消机制实现
+└── frame_pool.cpp          # 帧池实现
 ```
