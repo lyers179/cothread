@@ -53,6 +53,9 @@ set(BTHREAD_SOURCES
     src/timer_thread.cpp
     src/execution_queue.cpp
     src/platform/platform.cpp
+    src/bthread/sync/mutex.cpp
+    src/bthread/sync/cond.cpp
+    src/bthread/sync/event.cpp
     ${PLATFORM_SOURCES}
 )
 
@@ -74,6 +77,9 @@ set(BTHREAD_HEADERS
     include/bthread/timer_thread.h
     include/bthread/execution_queue.h
     include/bthread/platform/platform.h
+    include/bthread/sync/mutex.hpp
+    include/bthread/sync/cond.hpp
+    include/bthread/sync/event.hpp
     ${PLATFORM_HEADERS}
 )
 
