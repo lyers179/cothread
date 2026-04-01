@@ -81,6 +81,10 @@ set(BTHREAD_HEADERS
     include/bthread/timer_thread.h
     include/bthread/execution_queue.h
     include/bthread/platform/platform.h
+    include/bthread/platform/platform.hpp
+    include/bthread/platform/futex.hpp
+    include/bthread/platform/stack.hpp
+    include/bthread/platform/context.hpp
     include/bthread/sync/mutex.hpp
     include/bthread/sync/cond.hpp
     include/bthread/sync/event.hpp
