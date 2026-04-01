@@ -1,3 +1,4 @@
+// src/work_stealing_queue.cpp
 #include "bthread/work_stealing_queue.h"
 
 namespace bthread {
@@ -8,7 +9,7 @@ WorkStealingQueue::WorkStealingQueue() {
     }
 }
 
-void WorkStealingQueue::Push(TaskMeta* task) {
+void WorkStealingQueue::Push(TaskMetaBase* task) {
     uint64_t t = tail_.load(std::memory_order_relaxed);
     uint32_t idx = ExtractIndex(t);
 
@@ -19,7 +20,7 @@ void WorkStealingQueue::Push(TaskMeta* task) {
                 std::memory_order_release);
 }
 
-TaskMeta* WorkStealingQueue::Pop() {
+TaskMetaBase* WorkStealingQueue::Pop() {
     uint64_t h = head_.load(std::memory_order_relaxed);
     uint64_t t = tail_.load(std::memory_order_acquire);
 
@@ -29,7 +30,7 @@ TaskMeta* WorkStealingQueue::Pop() {
 
     // Decrement tail first (LIFO for owner)
     uint32_t idx = (ExtractIndex(t) - 1 + CAPACITY) % CAPACITY;
-    TaskMeta* task = buffer_[idx].load(std::memory_order_relaxed);
+    TaskMetaBase* task = buffer_[idx].load(std::memory_order_relaxed);
 
     if (idx == ExtractIndex(h)) {
         // Only one element, need to claim via head
@@ -49,7 +50,7 @@ TaskMeta* WorkStealingQueue::Pop() {
     return task;
 }
 
-TaskMeta* WorkStealingQueue::Steal() {
+TaskMetaBase* WorkStealingQueue::Steal() {
     uint64_t h = head_.load(std::memory_order_acquire);
     uint64_t t = tail_.load(std::memory_order_acquire);
 
@@ -58,7 +59,7 @@ TaskMeta* WorkStealingQueue::Steal() {
     }
 
     uint32_t idx = ExtractIndex(h);
-    TaskMeta* task = buffer_[idx].load(std::memory_order_acquire);
+    TaskMetaBase* task = buffer_[idx].load(std::memory_order_acquire);
 
     // Try to claim this slot
     if (head_.compare_exchange_strong(h,

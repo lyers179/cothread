@@ -3,6 +3,7 @@
 #include "bthread/timer_thread.h"
 #include "bthread/butex.h"
 #include "bthread/platform/platform.h"
+#include "coro/meta.h"
 
 #include <thread>
 
@@ -31,13 +32,17 @@ void Scheduler::Init() {
         }
 
         // Set running flag BEFORE starting workers to prevent race condition
-        // Workers check running() in their loop and would exit immediately if false
         running_.store(true, std::memory_order_release);
 
         StartWorkers(n);
         GetTaskGroup().set_worker_count(n);
         initialized_.store(true, std::memory_order_release);
     });
+}
+
+void Scheduler::Init(int worker_count) {
+    configured_count_ = worker_count;
+    Init();
 }
 
 void Scheduler::Shutdown() {
@@ -92,18 +97,82 @@ Worker* Scheduler::GetWorker(int index) {
     return nullptr;
 }
 
-void Scheduler::EnqueueTask(TaskMeta* task) {
+// ========== Unified Task Submission ==========
+
+void Scheduler::Submit(TaskMetaBase* task) {
+    // Auto-initialize if not already initialized
+    if (!initialized_.load(std::memory_order_acquire)) {
+        Init();
+    }
+
+    // Set state to READY
+    task->state.store(TaskState::READY, std::memory_order_release);
+
     // First try to push to current worker's local queue
     Worker* current = Worker::Current();
     if (current) {
         current->local_queue().Push(task);
     } else {
         // Not in a worker thread, push to global queue
-        global_queue().Push(task);
+        global_queue_.Push(task);
         // Wake up all idle workers to ensure tasks are processed
         WakeIdleWorkers(worker_count_.load(std::memory_order_acquire));
     }
 }
+
+void Scheduler::EnqueueTask(TaskMeta* task) {
+    // Legacy bthread method - forwards to Submit
+    Submit(static_cast<TaskMetaBase*>(task));
+}
+
+// ========== Coroutine Support ==========
+
+template<typename T>
+coro::Task<T> Scheduler::Spawn(coro::Task<T> task) {
+    // Auto-initialize if not already initialized
+    if (!initialized_.load(std::memory_order_acquire)) {
+        Init();
+    }
+
+    // Allocate CoroutineMeta (use existing coroutine infrastructure)
+    // For now, delegate to the existing CoroutineScheduler
+    // This will be unified in a future phase
+
+    // Submit the coroutine task
+    coro::CoroutineMeta* meta = new coro::CoroutineMeta();
+    meta->handle = task.handle();
+    meta->state.store(coro::CoroutineMeta::State::READY, std::memory_order_release);
+
+    // Store CoroutineMeta in promise
+    task.handle().promise().set_meta(meta);
+
+    Submit(meta);
+    return std::move(task);
+}
+
+template<typename T>
+coro::SafeTask<T> Scheduler::Spawn(coro::SafeTask<T> task) {
+    // Auto-initialize if not already initialized
+    if (!initialized_.load(std::memory_order_acquire)) {
+        Init();
+    }
+
+    // Similar to Task<T> spawning
+    coro::CoroutineMeta* meta = new coro::CoroutineMeta();
+    meta->handle = task.handle();
+    meta->state.store(coro::CoroutineMeta::State::READY, std::memory_order_release);
+
+    task.handle().promise().set_meta(meta);
+
+    Submit(meta);
+    return std::move(task);
+}
+
+// Explicit template instantiation
+template coro::Task<void> Scheduler::Spawn(coro::Task<void>);
+template coro::Task<int> Scheduler::Spawn(coro::Task<int>);
+template coro::SafeTask<void> Scheduler::Spawn(coro::SafeTask<void>);
+template coro::SafeTask<int> Scheduler::Spawn(coro::SafeTask<int>);
 
 TimerThread* Scheduler::GetTimerThread() {
     std::call_once(timer_init_flag_, [this] {

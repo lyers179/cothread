@@ -1,10 +1,11 @@
+// include/bthread/worker.h
 #pragma once
 
 #include <atomic>
 #include <cstdint>
 #include <thread>
 
-#include "bthread/task_meta.h"
+#include "bthread/core/task_meta_base.hpp"
 #include "bthread/work_stealing_queue.h"
 #include "bthread/platform/platform.h"
 
@@ -13,7 +14,14 @@ namespace bthread {
 // Forward declarations
 class Scheduler;
 
-// Worker represents a pthread worker thread
+/**
+ * @brief Worker represents a pthread worker thread that executes both bthread and coroutine tasks.
+ *
+ * Each worker has:
+ * - A local work-stealing queue for bthread tasks
+ * - Access to the global queue for both task types
+ * - A saved context for switching back from bthread tasks
+ */
 class Worker {
 public:
     explicit Worker(int id);
@@ -23,17 +31,17 @@ public:
     Worker(const Worker&) = delete;
     Worker& operator=(const Worker&) = delete;
 
-    // Main worker loop
+    // Main worker loop - handles both bthread and coroutine tasks
     void Run();
 
-    // Pick next task to run
-    TaskMeta* PickTask();
+    // Pick next task to run (returns TaskMetaBase* for unified handling)
+    TaskMetaBase* PickTask();
 
     // Suspend current task and return to scheduler
     void SuspendCurrent();
 
     // Resume a task
-    void Resume(TaskMeta* task);
+    void Resume(TaskMetaBase* task);
 
     // Wait for task when idle
     void WaitForTask();
@@ -46,7 +54,7 @@ public:
 
     // Accessors
     int id() const { return id_; }
-    TaskMeta* current_task() const { return current_task_; }
+    TaskMetaBase* current_task() const { return current_task_; }
     WorkStealingQueue& local_queue() { return local_queue_; }
     const WorkStealingQueue& local_queue() const { return local_queue_; }
     platform::ThreadId thread() const { return thread_; }
@@ -57,15 +65,21 @@ public:
 
 private:
     // Handle task after it finishes running
-    void HandleTaskAfterRun(TaskMeta* task);
+    void HandleTaskAfterRun(TaskMetaBase* task);
 
-    // Handle finished task
-    void HandleFinishedTask(TaskMeta* task);
+    // Handle finished bthread task
+    void HandleFinishedBthread(TaskMeta* task);
+
+    // Run a bthread task
+    void RunBthread(TaskMeta* task);
+
+    // Run a coroutine task
+    void RunCoroutine(coro::CoroutineMeta* meta);
 
     int id_;
     platform::ThreadId thread_;
     WorkStealingQueue local_queue_;
-    TaskMeta* current_task_{nullptr};
+    TaskMetaBase* current_task_{nullptr};
     platform::Context saved_context_{};
 
     // Sleep state

@@ -1,13 +1,24 @@
+// include/bthread/work_stealing_queue.h
 #pragma once
 
 #include <atomic>
 #include <cstdint>
 
-#include "bthread/task_meta.h"
+#include "bthread/core/task_meta_base.hpp"
 
 namespace bthread {
 
-// Lock-free double-ended queue with ABA prevention
+/**
+ * @brief Lock-free double-ended queue with ABA prevention for work stealing.
+ *
+ * Supports both bthread (TaskMeta) and coroutine (CoroutineMeta) tasks through
+ * the unified TaskMetaBase interface.
+ *
+ * Thread Safety:
+ * - Push(): Owner thread only
+ * - Pop(): Owner thread only
+ * - Steal(): Other threads (thieves)
+ */
 class WorkStealingQueue {
 public:
     static constexpr size_t CAPACITY = 1024;
@@ -19,16 +30,27 @@ public:
     WorkStealingQueue(const WorkStealingQueue&) = delete;
     WorkStealingQueue& operator=(const WorkStealingQueue&) = delete;
 
-    // Push task to tail (owner only)
-    void Push(TaskMeta* task);
+    /**
+     * @brief Push task to tail (owner only).
+     * @param task The task to push (TaskMeta or CoroutineMeta)
+     */
+    void Push(TaskMetaBase* task);
 
-    // Pop task from tail (owner only)
-    TaskMeta* Pop();
+    /**
+     * @brief Pop task from tail (owner only).
+     * @return The popped task, or nullptr if empty
+     */
+    TaskMetaBase* Pop();
 
-    // Steal task from head (thief only)
-    TaskMeta* Steal();
+    /**
+     * @brief Steal task from head (thief only).
+     * @return The stolen task, or nullptr if empty
+     */
+    TaskMetaBase* Steal();
 
-    // Check if empty (approximate)
+    /**
+     * @brief Check if empty (approximate).
+     */
     bool Empty() const;
 
 private:
@@ -39,7 +61,7 @@ private:
         return (static_cast<uint64_t>(ver) << 32) | idx;
     }
 
-    std::atomic<TaskMeta*> buffer_[CAPACITY];
+    std::atomic<TaskMetaBase*> buffer_[CAPACITY];
     std::atomic<uint64_t> head_{0};  // [version:32 | index:32]
     std::atomic<uint64_t> tail_{0};  // [version:32 | index:32]
 };

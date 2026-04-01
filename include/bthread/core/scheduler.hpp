@@ -1,4 +1,4 @@
-// include/bthread/scheduler.h
+// include/bthread/core/scheduler.hpp
 #pragma once
 
 #include <atomic>
@@ -7,12 +7,17 @@
 #include <condition_variable>
 #include <vector>
 #include <thread>
+#include <functional>
 
 #include "bthread/core/task_meta_base.hpp"
-#include "bthread/task_meta.h"
-#include "bthread/task_group.h"
-#include "bthread/worker.h"
-#include "bthread/global_queue.h"
+
+// Forward declarations
+namespace bthread {
+class Worker;
+class TimerThread;
+class GlobalQueue;
+class TaskGroup;
+}
 
 // Forward declarations for coroutine support
 namespace coro {
@@ -23,10 +28,6 @@ struct CoroutineMeta;
 
 namespace bthread {
 
-// Forward declarations
-class TimerThread;
-class Butex;
-
 /**
  * @brief Unified scheduler managing both bthread and coroutine tasks.
  *
@@ -34,45 +35,43 @@ class Butex;
  * are multiplexed onto N OS threads (workers).
  *
  * Thread Safety:
- * - Init(): Thread-safe via std::call_once. Can be called from any thread.
- * - Shutdown(): Thread-safe. Can be called from any thread.
- * - Submit(): Thread-safe. Can be called from any thread.
- * - Spawn(): Thread-safe. Can be called from any thread concurrently.
+ * - Init(): Thread-safe via std::call_once
+ * - Shutdown(): Thread-safe
+ * - Submit(): Thread-safe, can be called from any thread
+ * - Spawn(): Thread-safe for coroutine tasks
  *
  * Usage:
- * - Call Init() before submitting tasks, or Submit() will auto-initialize.
- * - Call Shutdown() to stop worker threads (optional - destructor also calls it).
+ * - Call Init() before submitting tasks, or Submit() will auto-initialize
+ * - Call Shutdown() to stop worker threads (optional - destructor also calls it)
+ * - Use Submit() for raw TaskMetaBase* submission
+ * - Use coro::co_spawn() for coroutine tasks
  */
 class Scheduler {
 public:
     /// Get singleton instance
     static Scheduler& Instance();
 
-    /// Initialize scheduler with default worker count
+    /// Initialize scheduler with default worker count (hardware_concurrency)
     void Init();
 
     /// Initialize scheduler with specified worker count
     void Init(int worker_count);
 
-    /// Shutdown scheduler
+    /// Shutdown scheduler and join all worker threads
     void Shutdown();
 
-    /// Check if running
+    /// Check if scheduler is running
     bool running() const {
         return running_.load(std::memory_order_acquire);
     }
 
-    /// Check if initialized
+    /// Check if scheduler is initialized
     bool initialized() const {
         return initialized_.load(std::memory_order_acquire);
     }
 
-    /// Get global queue
-    GlobalQueue& global_queue() { return global_queue_; }
-    const GlobalQueue& global_queue() const { return global_queue_; }
-
-    /// Get task group
-    TaskGroup& task_group() { return GetTaskGroup(); }
+    /// Get global queue (legacy compatibility)
+    GlobalQueue& global_queue();
 
     /// Get worker count
     int32_t worker_count() const {
@@ -82,49 +81,48 @@ public:
     /// Get worker by index
     Worker* GetWorker(int index);
 
+    /// Get timer thread (lazy init)
+    TimerThread* GetTimerThread();
+
     /// Set worker count (must be called before Init)
     void set_worker_count(int count) {
         configured_count_ = count;
     }
 
-    /// Get timer thread (lazy init)
-    TimerThread* GetTimerThread();
-
-    /// Wake butex waiters
-    void WakeButex(void* butex, int count);
-
-    /// Wake idle workers
-    void WakeIdleWorkers(int count);
-
-    // ========== Unified Task Submission ==========
-
     /**
-     * @brief Submit a task for execution (unified for bthread and coroutine).
+     * @brief Submit a task for execution.
      * Thread-safe: Can be called from any thread.
      * Auto-initializes the scheduler if not already initialized.
-     * @param task The task to submit (TaskMeta or CoroutineMeta)
+     * @param task The task to submit (must be TaskMeta or CoroutineMeta)
      */
     void Submit(TaskMetaBase* task);
 
     /**
-     * @brief Enqueue a bthread task (legacy compatibility).
-     * Thread-safe: Can be called from any thread.
+     * @brief Wake waiters on a synchronization primitive.
+     * @param sync Pointer to the sync primitive (Butex, Mutex, etc.)
+     * @param count Number of waiters to wake (-1 for all)
      */
-    void EnqueueTask(TaskMeta* task);
+    void WakeWaiters(void* sync, int count);
+
+    /// Wake idle workers
+    void WakeIdleWorkers(int count);
 
     // ========== Coroutine Support ==========
 
     /**
      * @brief Spawn a coroutine task for execution.
-     * Thread-safe: Can be called from any thread concurrently.
+     * Thread-safe: Can be called from any thread.
      * Auto-initializes the scheduler if not already initialized.
+     * @tparam T Return type of the coroutine
+     * @param task The coroutine task to spawn
+     * @return The spawned task (can be co_awaited or detached)
      */
     template<typename T>
     coro::Task<T> Spawn(coro::Task<T> task);
 
     /**
      * @brief Spawn a SafeTask coroutine for execution.
-     * Thread-safe: Can be called from any thread concurrently.
+     * Thread-safe: Can be called from any thread.
      */
     template<typename T>
     coro::SafeTask<T> Spawn(coro::SafeTask<T> task);
@@ -148,7 +146,8 @@ private:
     std::atomic<int32_t> worker_count_{0};
     int32_t configured_count_{0};
 
-    GlobalQueue global_queue_;
+    // PIMPL for GlobalQueue to avoid header dependency
+    std::unique_ptr<GlobalQueue> global_queue_;
 
     std::unique_ptr<TimerThread> timer_thread_;
     std::once_flag timer_init_flag_;
@@ -159,7 +158,7 @@ private:
     std::once_flag init_once_;
 };
 
-// ========== Coroutine Spawn Functions (namespace coro) ==========
+// ========== Coroutine Spawn Functions ==========
 
 namespace coro {
 
@@ -167,6 +166,9 @@ namespace coro {
  * @brief Spawn a coroutine task for execution by the unified scheduler.
  * Thread-safe: Can be called from any thread concurrently.
  * Auto-initializes the scheduler if not already initialized.
+ * @tparam T Return type of the coroutine
+ * @param task The coroutine task to spawn
+ * @return The spawned task
  */
 template<typename T>
 Task<T> co_spawn(Task<T> task) {
@@ -183,6 +185,7 @@ SafeTask<T> co_spawn(SafeTask<T> task) {
 
 /**
  * @brief Spawn a detached coroutine (fire and forget).
+ * The coroutine will run to completion without needing to be joined.
  */
 template<typename T>
 void co_spawn_detached(Task<T> task) {

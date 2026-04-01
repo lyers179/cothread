@@ -1,3 +1,4 @@
+// src/worker.cpp
 #include "bthread/worker.h"
 #include "bthread/scheduler.h"
 #include "bthread/task_meta.h"
@@ -5,6 +6,7 @@
 #include "bthread/task_group.h"
 #include "bthread/butex.h"
 #include "bthread/platform/platform.h"
+#include "coro/meta.h"
 
 #include <random>
 #include <cstring>
@@ -31,7 +33,7 @@ void Worker::Run() {
     current_worker_ = this;
 
     while (Scheduler::Instance().running()) {
-        TaskMeta* task = PickTask();
+        TaskMetaBase* task = PickTask();
         if (task == nullptr) {
             WaitForTask();
             continue;
@@ -39,13 +41,20 @@ void Worker::Run() {
 
         current_task_ = task;
         task->state.store(TaskState::RUNNING, std::memory_order_release);
-        task->local_worker = this;
+        task->owner_worker = this;
 
-        // Switch to bthread
-        platform::SwapContext(&saved_context_, &task->context);
+        // Handle based on task type
+        switch (task->type) {
+            case TaskType::BTHREAD:
+                RunBthread(static_cast<TaskMeta*>(task));
+                break;
+            case TaskType::COROUTINE:
+                RunCoroutine(static_cast<coro::CoroutineMeta*>(task));
+                break;
+        }
 
-        // Returned from bthread
-        TaskMeta* completed_task = current_task_;
+        // Returned from task
+        TaskMetaBase* completed_task = current_task_;
         current_task_ = nullptr;
 
         // Handle task based on its new state
@@ -53,27 +62,28 @@ void Worker::Run() {
     }
 }
 
-TaskMeta* Worker::PickTask() {
-    TaskMeta* task;
+void Worker::RunBthread(TaskMeta* task) {
+    // Switch to bthread context
+    platform::SwapContext(&saved_context_, &task->context);
+}
 
-    // 1. Local queue
+void Worker::RunCoroutine(coro::CoroutineMeta* meta) {
+    // Resume the coroutine
+    if (meta->handle && !meta->handle.done()) {
+        meta->handle.resume();
+    }
+}
+
+TaskMetaBase* Worker::PickTask() {
+    TaskMetaBase* task;
+
+    // 1. Local queue (returns TaskMetaBase*)
     task = local_queue_.Pop();
     if (task) return task;
 
-    // 2. Global queue (returns TaskMetaBase*, cast to TaskMeta* for bthread)
-    TaskMetaBase* base_task = Scheduler::Instance().global_queue().Pop();
-    if (base_task) {
-        // In current implementation, global queue only has TaskMeta (bthread)
-        // CoroutineMeta is handled by CoroutineScheduler
-        if (base_task->type == TaskType::BTHREAD) {
-            task = static_cast<TaskMeta*>(base_task);
-        } else {
-            // CoroutineMeta - should not happen in current bthread-only worker
-            // For unified scheduler (Phase 2), this will be handled properly
-            task = nullptr;
-        }
-        if (task) return task;
-    }
+    // 2. Global queue (returns TaskMetaBase*)
+    task = Scheduler::Instance().global_queue().Pop();
+    if (task) return task;
 
     // 3. Random work stealing
     int32_t wc = Scheduler::Instance().worker_count();
@@ -88,7 +98,7 @@ TaskMeta* Worker::PickTask() {
 
         Worker* other = Scheduler::Instance().GetWorker(victim);
         if (other) {
-            task = other->local_queue().Steal();
+            task = other->local_queue_.Steal();
             if (task) return task;
         }
     }
@@ -97,10 +107,14 @@ TaskMeta* Worker::PickTask() {
 }
 
 void Worker::SuspendCurrent() {
-    platform::SwapContext(&current_task_->context, &saved_context_);
+    // For bthread, swap back to worker context
+    if (current_task_->type == TaskType::BTHREAD) {
+        platform::SwapContext(&static_cast<TaskMeta*>(current_task_)->context, &saved_context_);
+    }
+    // For coroutine, the handle naturally returns to the caller
 }
 
-void Worker::Resume(TaskMeta* task) {
+void Worker::Resume(TaskMetaBase* task) {
     (void)task;
     // Resume is handled by the scheduler loop
     // Task is already in a queue and will be picked up
@@ -159,16 +173,19 @@ int Worker::YieldCurrent() {
     return 0;
 }
 
-void Worker::HandleTaskAfterRun(TaskMeta* task) {
+void Worker::HandleTaskAfterRun(TaskMetaBase* task) {
     TaskState state = task->state.load(std::memory_order_acquire);
 
     switch (state) {
         case TaskState::FINISHED:
-            HandleFinishedTask(task);
+            if (task->type == TaskType::BTHREAD) {
+                HandleFinishedBthread(static_cast<TaskMeta*>(task));
+            }
+            // Coroutine cleanup is handled by the coroutine framework
             break;
 
         case TaskState::SUSPENDED:
-            // Task is waiting on butex, nothing to do
+            // Task is waiting on sync primitive, nothing to do
             break;
 
         case TaskState::READY:
@@ -181,7 +198,7 @@ void Worker::HandleTaskAfterRun(TaskMeta* task) {
     }
 }
 
-void Worker::HandleFinishedTask(TaskMeta* task) {
+void Worker::HandleFinishedBthread(TaskMeta* task) {
     // Wake up any joiners
     if (task->join_waiters.load(std::memory_order_acquire) > 0 && task->join_butex) {
         // Increment generation before waking, so joiners can detect the change
