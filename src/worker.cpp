@@ -32,10 +32,16 @@ Worker* Worker::Current() {
 void Worker::Run() {
     current_worker_ = this;
 
-    while (Scheduler::Instance().running()) {
+    while (!IsStopped()) {
         TaskMetaBase* task = PickTask();
         if (task == nullptr) {
+            if (IsStopped()) {
+                break;
+            }
             WaitForTask();
+            if (IsStopped()) {
+                break;
+            }
             continue;
         }
 
@@ -43,7 +49,6 @@ void Worker::Run() {
         task->state.store(TaskState::RUNNING, std::memory_order_release);
         task->owner_worker = this;
 
-        // Handle based on task type
         switch (task->type) {
             case TaskType::BTHREAD:
                 RunBthread(static_cast<TaskMeta*>(task));
@@ -53,17 +58,20 @@ void Worker::Run() {
                 break;
         }
 
-        // Returned from task
         TaskMetaBase* completed_task = current_task_;
         current_task_ = nullptr;
 
-        // Handle task based on its new state
+        // Check stopped after running task
+        if (IsStopped()) {
+            HandleTaskAfterRun(completed_task);
+            break;
+        }
+
         HandleTaskAfterRun(completed_task);
     }
 }
 
 void Worker::RunBthread(TaskMeta* task) {
-    // Switch to bthread context
     platform::SwapContext(&saved_context_, &task->context);
 }
 
@@ -121,46 +129,35 @@ void Worker::Resume(TaskMetaBase* task) {
 }
 
 void Worker::WaitForTask() {
-    sleeping_.store(true, std::memory_order_release);
+    // Check if stopped first
+    int token = sleep_token_.load(std::memory_order_acquire);
+    if (token & STOP_FLAG) {
+        return;  // Worker is stopped
+    }
 
     // Double-check for tasks
     if (!local_queue_.Empty() ||
         !Scheduler::Instance().global_queue().Empty()) {
-        sleeping_.store(false, std::memory_order_relaxed);
         return;
     }
 
-    // Check if we should exit
-    if (!Scheduler::Instance().running()) {
-        sleeping_.store(false, std::memory_order_relaxed);
-        return;
-    }
-
-    // Read sleep_token AFTER checking queues
-    // This ensures we don't miss a wake-up that happened after the check
-    int expected = sleep_token_.load(std::memory_order_acquire);
-
-    // Triple-check for tasks AFTER reading sleep_token
-    // This prevents the race where a wake-up happens between queue check and FutexWait
-    if (!local_queue_.Empty() ||
-        !Scheduler::Instance().global_queue().Empty()) {
-        sleeping_.store(false, std::memory_order_relaxed);
-        return;
-    }
-
-    // Sleep using platform futex with timeout to periodically check running state
+    // Sleep using platform futex with timeout
     platform::timespec ts;
     ts.tv_sec = 0;
     ts.tv_nsec = 100000000;  // 100ms timeout
-    platform::FutexWait(&sleep_token_, expected, &ts);
-
-    sleeping_.store(false, std::memory_order_relaxed);
+    platform::FutexWait(&sleep_token_, token, &ts);
 }
 
 void Worker::WakeUp() {
-    // Always increment sleep token to wake up any pending FutexWait
-    // This is safe even if worker is not sleeping - it will just return from FutexWait
-    sleep_token_.fetch_add(1, std::memory_order_release);
+    // Increment counter (bits 1-31), preserve stop flag
+    // This ensures the value changes, waking up FutexWait
+    sleep_token_.fetch_add(2, std::memory_order_release);  // Add 2 to skip stop bit
+    platform::FutexWake(&sleep_token_, 1);
+}
+
+void Worker::Stop() {
+    // Set stop flag (bit 0) and wake up
+    sleep_token_.fetch_or(STOP_FLAG, std::memory_order_release);
     platform::FutexWake(&sleep_token_, 1);
 }
 

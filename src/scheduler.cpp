@@ -7,6 +7,7 @@
 #include "coro/coroutine.h"
 
 #include <thread>
+#include <chrono>
 
 namespace bthread {
 
@@ -52,17 +53,35 @@ void Scheduler::Shutdown() {
     }
 
     running_.store(false, std::memory_order_release);
-    WakeAllWorkers();
 
-    std::lock_guard<std::mutex> lock(workers_mutex_);
-    for (auto* w : workers_) {
+    // Stop all workers multiple times with delays
+    // This ensures the stop flag is set and workers are woken
+    for (int attempt = 0; attempt < 5; ++attempt) {
+        std::lock_guard<std::mutex> lock(workers_mutex_);
+        for (auto* w : workers_) {
+            w->Stop();
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+
+    // Join all workers
+    std::vector<Worker*> workers_copy;
+    {
+        std::lock_guard<std::mutex> lock(workers_mutex_);
+        workers_copy = workers_;
+    }
+
+    for (auto* w : workers_copy) {
         platform::JoinThread(w->thread());
         delete w;
     }
-    workers_.clear();
+
+    {
+        std::lock_guard<std::mutex> lock(workers_mutex_);
+        workers_.clear();
+    }
     worker_count_.store(0, std::memory_order_release);
 
-    // Stop timer thread
     if (timer_thread_) {
         timer_thread_->Stop();
         timer_thread_.reset();

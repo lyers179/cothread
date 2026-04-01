@@ -17,6 +17,8 @@ set(TEST_SOURCES
     bthread_test.cpp
     stress_test.cpp
     diag_mutex.cpp
+    minimal_test.cpp
+    mutex_bench_test.cpp
 )
 
 foreach(test_source ${TEST_SOURCES})

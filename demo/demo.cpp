@@ -263,5 +263,8 @@ int main() {
     fprintf(stderr, "       All demos completed!\n");
     fprintf(stderr, "========================================\n");
 
+    // Explicitly shutdown scheduler before static destruction
+    bthread_shutdown();
+
     return 0;
 }
