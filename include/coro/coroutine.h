@@ -52,23 +52,37 @@ public:
     }
 
     std::suspend_always initial_suspend() noexcept { return {}; }
-    std::suspend_always final_suspend() noexcept { return {}; }
+
+    // Custom final suspender that resumes the awaiter (if any) before suspending
+    class FinalAwaiter {
+    public:
+        bool await_ready() noexcept { return false; }
+
+        std::coroutine_handle<> await_suspend(std::coroutine_handle<TaskPromise<T>> h) noexcept {
+            TaskPromise& promise = h.promise();
+            if (promise.awaiter_) {
+                // Swap to awaiter's CoroutineMeta context if available
+                if (promise.awaiter_meta_) {
+                    current_coro_meta_ = promise.awaiter_meta_;
+                }
+                return promise.awaiter_;
+            }
+            return std::noop_coroutine();
+        }
+
+        void await_resume() noexcept {}
+    };
+
+    FinalAwaiter final_suspend() noexcept { return {}; }
 
     void return_value(T value) {
         result_ = std::move(value);
-        if (awaiter_) {
-            // When resuming the awaiter (outer coroutine), restore the awaiter's
-            // CoroutineMeta context. This is needed for nested coroutines where
-            // the inner coroutine completes and resumes the outer coroutine.
-            ResumeAwaiter();
-        }
+        // Don't resume awaiter here - do it in final_suspend instead
     }
 
     void unhandled_exception() {
         exception_ = std::current_exception();
-        if (awaiter_) {
-            ResumeAwaiter();
-        }
+        // Don't resume awaiter here - do it in final_suspend instead
     }
 
     T get_result() {
@@ -86,17 +100,6 @@ public:
     CoroutineMeta* meta() const { return meta_; }
 
 private:
-    void ResumeAwaiter() {
-        // Swap to awaiter's CoroutineMeta context if available
-        CoroutineMeta* prev_meta = current_coro_meta();
-        if (awaiter_meta_) {
-            current_coro_meta_ = awaiter_meta_;
-        }
-        awaiter_.resume();
-        // Restore previous context (though this coroutine is completing)
-        current_coro_meta_ = prev_meta;
-    }
-
     T result_{};
     std::exception_ptr exception_;
     std::coroutine_handle<> awaiter_;
@@ -155,26 +158,41 @@ public:
     Task<void> get_return_object();
 
     std::suspend_always initial_suspend() noexcept { return {}; }
-    std::suspend_always final_suspend() noexcept { return {}; }
+
+    // Custom final suspender that resumes the awaiter (if any) before suspending
+    class FinalAwaiter {
+    public:
+        bool await_ready() noexcept { return false; }
+
+        std::coroutine_handle<> await_suspend(std::coroutine_handle<TaskPromise<void>> h) noexcept {
+            TaskPromise& promise = h.promise();
+            if (promise.awaiter_) {
+                if (promise.awaiter_meta_) {
+                    current_coro_meta_ = promise.awaiter_meta_;
+                }
+                return promise.awaiter_;
+            }
+            return std::noop_coroutine();
+        }
+
+        void await_resume() noexcept {}
+    };
+
+    FinalAwaiter final_suspend() noexcept { return {}; }
 
     void return_void() {
-        if (awaiter_) {
-            ResumeAwaiter();
-        }
+        // Don't resume awaiter here - do it in final_suspend instead
     }
 
     void unhandled_exception() {
         exception_ = std::current_exception();
-        if (awaiter_) {
-            ResumeAwaiter();
-        }
+        // Don't resume awaiter here - do it in final_suspend instead
     }
 
     void get_result() { if (exception_) std::rethrow_exception(exception_); }
 
     void set_awaiter(std::coroutine_handle<> h) {
         awaiter_ = h;
-        // Capture the awaiter's CoroutineMeta context for proper nested resumption
         awaiter_meta_ = current_coro_meta();
     }
 
@@ -182,15 +200,6 @@ public:
     CoroutineMeta* meta() const { return meta_; }
 
 private:
-    void ResumeAwaiter() {
-        CoroutineMeta* prev_meta = current_coro_meta();
-        if (awaiter_meta_) {
-            current_coro_meta_ = awaiter_meta_;
-        }
-        awaiter_.resume();
-        current_coro_meta_ = prev_meta;
-    }
-
     std::exception_ptr exception_;
     std::coroutine_handle<> awaiter_;
     CoroutineMeta* awaiter_meta_{nullptr};
@@ -316,18 +325,38 @@ public:
     }
 
     std::suspend_always initial_suspend() noexcept { return {}; }
-    std::suspend_always final_suspend() noexcept { return {}; }
+
+    // Custom final suspender that resumes the awaiter (if any) before suspending
+    class FinalAwaiter {
+    public:
+        bool await_ready() noexcept { return false; }
+
+        std::coroutine_handle<> await_suspend(std::coroutine_handle<SafeTaskPromise<T>> h) noexcept {
+            SafeTaskPromise& promise = h.promise();
+            if (promise.awaiter_) {
+                if (promise.awaiter_meta_) {
+                    current_coro_meta_ = promise.awaiter_meta_;
+                }
+                return promise.awaiter_;
+            }
+            return std::noop_coroutine();
+        }
+
+        void await_resume() noexcept {}
+    };
+
+    FinalAwaiter final_suspend() noexcept { return {}; }
 
     // Accept value - creates Result<T> with success
     void return_value(T value) {
         result_ = coro::Result<T>(std::move(value));
-        if (awaiter_) ResumeAwaiter();
+        // Don't resume awaiter here - do it in final_suspend instead
     }
 
     // Accept Error - creates Result<T> with error
     void return_value(coro::Error error) {
         result_ = coro::Result<T>(std::move(error));
-        if (awaiter_) ResumeAwaiter();
+        // Don't resume awaiter here - do it in final_suspend instead
     }
 
     // Convert exceptions to Error
@@ -339,7 +368,7 @@ public:
         } catch (...) {
             result_ = coro::Result<T>(coro::Error(-4, "unknown exception"));
         }
-        if (awaiter_) ResumeAwaiter();
+        // Don't resume awaiter here - do it in final_suspend instead
     }
 
     coro::Result<T> get_result() { return std::move(result_); }
@@ -353,15 +382,6 @@ public:
     CoroutineMeta* meta() const { return meta_; }
 
 private:
-    void ResumeAwaiter() {
-        CoroutineMeta* prev_meta = current_coro_meta();
-        if (awaiter_meta_) {
-            current_coro_meta_ = awaiter_meta_;
-        }
-        awaiter_.resume();
-        current_coro_meta_ = prev_meta;
-    }
-
     coro::Result<T> result_;
     std::coroutine_handle<> awaiter_;
     CoroutineMeta* awaiter_meta_{nullptr};
@@ -393,24 +413,44 @@ public:
     SafeTask<void> get_return_object();
 
     std::suspend_always initial_suspend() noexcept { return {}; }
-    std::suspend_always final_suspend() noexcept { return {}; }
+
+    // Custom final suspender that resumes the awaiter (if any) before suspending
+    class FinalAwaiter {
+    public:
+        bool await_ready() noexcept { return false; }
+
+        std::coroutine_handle<> await_suspend(std::coroutine_handle<SafeTaskPromise<void>> h) noexcept {
+            SafeTaskPromise& promise = h.promise();
+            if (promise.awaiter_) {
+                if (promise.awaiter_meta_) {
+                    current_coro_meta_ = promise.awaiter_meta_;
+                }
+                return promise.awaiter_;
+            }
+            return std::noop_coroutine();
+        }
+
+        void await_resume() noexcept {}
+    };
+
+    FinalAwaiter final_suspend() noexcept { return {}; }
 
     // Success case - co_return VoidSuccess{}; or co_return Result<void>();
     void return_value(VoidSuccess) {
         result_ = coro::Result<void>();
-        if (awaiter_) ResumeAwaiter();
+        // Don't resume awaiter here - do it in final_suspend instead
     }
 
     // Also accept Result<void> directly
     void return_value(coro::Result<void> res) {
         result_ = std::move(res);
-        if (awaiter_) ResumeAwaiter();
+        // Don't resume awaiter here - do it in final_suspend instead
     }
 
     // Error case - co_return Error(...);
     void return_value(coro::Error error) {
         result_ = coro::Result<void>(std::move(error));
-        if (awaiter_) ResumeAwaiter();
+        // Don't resume awaiter here - do it in final_suspend instead
     }
 
     // Convert exceptions to Error
@@ -422,7 +462,7 @@ public:
         } catch (...) {
             result_ = coro::Result<void>(coro::Error(-4, "unknown exception"));
         }
-        if (awaiter_) ResumeAwaiter();
+        // Don't resume awaiter here - do it in final_suspend instead
     }
 
     coro::Result<void> get_result() { return std::move(result_); }
@@ -436,15 +476,6 @@ public:
     CoroutineMeta* meta() const { return meta_; }
 
 private:
-    void ResumeAwaiter() {
-        CoroutineMeta* prev_meta = current_coro_meta();
-        if (awaiter_meta_) {
-            current_coro_meta_ = awaiter_meta_;
-        }
-        awaiter_.resume();
-        current_coro_meta_ = prev_meta;
-    }
-
     coro::Result<void> result_;
     std::coroutine_handle<> awaiter_;
     CoroutineMeta* awaiter_meta_{nullptr};
