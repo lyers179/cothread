@@ -6,42 +6,38 @@
 #include <cstdint>
 #include <thread>
 
-namespace bthread {
-    class Worker;
-}
+#include "bthread/core/task_meta_base.hpp"
 
 namespace coro {
 
 /**
  * @brief Coroutine metadata - manages coroutine lifecycle.
  *
+ * Inherits from bthread::TaskMetaBase and adds coroutine-specific fields.
+ *
  * Thread Safety Guarantees:
- * - `state`: Atomic, safe for concurrent state transitions.
+ * - Inherited atomic fields from TaskMetaBase (state, next)
+ * - `handle`: Not thread-safe. Owned by a single worker thread at any time.
  * - `cancel_requested`: Atomic, safe for concurrent cancellation checks.
- * - `next`: Atomic, used for intrusive MPSC queue linkage.
- * - `handle`, `owner_worker`, `waiting_sync`, `slot_index`, `generation`:
- *   Not thread-safe. These are owned by a single worker thread at any time.
  */
-struct CoroutineMeta {
-    enum State : uint8_t {
-        READY,      ///< Coroutine is ready to be scheduled
-        RUNNING,    ///< Coroutine is currently executing
-        SUSPENDED,  ///< Coroutine is waiting on a synchronization primitive
-        FINISHED    ///< Coroutine has completed execution
-    };
+struct CoroutineMeta : bthread::TaskMetaBase {
+    // Constructor - set type to COROUTINE
+    CoroutineMeta() : bthread::TaskMetaBase() {
+        type = bthread::TaskType::COROUTINE;
+    }
 
+    // ========== Coroutine Handle (coroutine-specific) ==========
     std::coroutine_handle<> handle;
-    std::atomic<State> state{READY};  ///< Atomic for cross-thread state transitions
-    bthread::Worker* owner_worker{nullptr};
+
+    // ========== Cancellation (coroutine-specific) ==========
     std::atomic<bool> cancel_requested{false};
-    void* waiting_sync{nullptr};  ///< CoMutex/CoCond pointer if waiting
 
-    // Intrusive queue linkage (atomic for MPSC queue safety)
-    std::atomic<CoroutineMeta*> next{nullptr};
-
-    // Identification
-    uint32_t slot_index{0};
-    uint32_t generation{0};
+    // ========== Resume Implementation ==========
+    void resume() override {
+        if (handle && !handle.done()) {
+            handle.resume();
+        }
+    }
 };
 
 /**
@@ -53,6 +49,9 @@ struct CoroutineMeta {
  *
  * This queue uses an atomic lock-free stack for the head and a tail pointer
  * for FIFO ordering. Producers push to the head, the consumer pops from tail.
+ *
+ * Note: This queue operates on CoroutineMeta*, which inherits from TaskMetaBase.
+ * For a unified queue that works with both task types, use bthread::GlobalQueue.
  */
 class CoroutineQueue {
 public:
@@ -71,7 +70,7 @@ public:
         CoroutineMeta* t = tail_.load(std::memory_order_acquire);
         if (!t) return nullptr;
 
-        CoroutineMeta* next = t->next.load(std::memory_order_acquire);
+        CoroutineMeta* next = static_cast<CoroutineMeta*>(t->next.load(std::memory_order_acquire));
         if (next) {
             tail_.store(next, std::memory_order_release);
             t->next.store(nullptr, std::memory_order_relaxed);
@@ -92,7 +91,7 @@ public:
         while (!t->next.load(std::memory_order_acquire)) {
             std::this_thread::yield();
         }
-        CoroutineMeta* n = t->next.load(std::memory_order_acquire);
+        CoroutineMeta* n = static_cast<CoroutineMeta*>(t->next.load(std::memory_order_acquire));
         tail_.store(n, std::memory_order_release);
         t->next.store(nullptr, std::memory_order_relaxed);
         return t;

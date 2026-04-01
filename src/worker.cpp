@@ -1,6 +1,7 @@
 #include "bthread/worker.h"
 #include "bthread/scheduler.h"
 #include "bthread/task_meta.h"
+#include "bthread/core/task_meta_base.hpp"
 #include "bthread/task_group.h"
 #include "bthread/butex.h"
 #include "bthread/platform/platform.h"
@@ -59,9 +60,20 @@ TaskMeta* Worker::PickTask() {
     task = local_queue_.Pop();
     if (task) return task;
 
-    // 2. Global queue
-    task = Scheduler::Instance().global_queue().Pop();
-    if (task) return task;
+    // 2. Global queue (returns TaskMetaBase*, cast to TaskMeta* for bthread)
+    TaskMetaBase* base_task = Scheduler::Instance().global_queue().Pop();
+    if (base_task) {
+        // In current implementation, global queue only has TaskMeta (bthread)
+        // CoroutineMeta is handled by CoroutineScheduler
+        if (base_task->type == TaskType::BTHREAD) {
+            task = static_cast<TaskMeta*>(base_task);
+        } else {
+            // CoroutineMeta - should not happen in current bthread-only worker
+            // For unified scheduler (Phase 2), this will be handled properly
+            task = nullptr;
+        }
+        if (task) return task;
+    }
 
     // 3. Random work stealing
     int32_t wc = Scheduler::Instance().worker_count();

@@ -60,6 +60,7 @@ set(BTHREAD_SOURCES
 set(BTHREAD_HEADERS
     include/bthread.h
     include/bthread/task_meta.h
+    include/bthread/core/task_meta_base.hpp
     include/bthread/task_group.h
     include/bthread/work_stealing_queue.h
     include/bthread/global_queue.h
