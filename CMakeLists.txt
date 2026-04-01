@@ -56,15 +56,19 @@ set(BTHREAD_SOURCES
     src/bthread/sync/mutex.cpp
     src/bthread/sync/cond.cpp
     src/bthread/sync/event.cpp
+    src/bthread/core/task.cpp
     ${PLATFORM_SOURCES}
 )
 
 # Headers
 set(BTHREAD_HEADERS
     include/bthread.h
+    include/bthread.hpp
     include/bthread/task_meta.h
     include/bthread/core/task_meta_base.hpp
     include/bthread/core/scheduler.hpp
+    include/bthread/core/task.hpp
+    include/bthread/api.hpp
     include/bthread/task_group.h
     include/bthread/work_stealing_queue.h
     include/bthread/global_queue.h
