@@ -17,7 +17,12 @@
 
 ### 3. Nested Coroutine Support
 **Status:** FIXED
-**Fix:** Added `awaiter_meta_` field to TaskPromise and SafeTaskPromise to store the awaiter's CoroutineMeta. When the awaited coroutine completes and resumes the awaiter, it now properly restores the awaiter's CoroutineMeta context via `ResumeAwaiter()`.
+**Fix:** Implemented custom `FinalAwaiter` for TaskPromise and SafeTaskPromise that:
+- Resumes the awaiter in `await_suspend()` after the coroutine reaches final_suspend
+- Properly swaps the CoroutineMeta context for nested coroutines
+- Returns `std::noop_coroutine()` if there's no awaiter
+
+The previous implementation resumed the awaiter in `return_value()`, but at that point the coroutine hadn't reached `final_suspend` yet, causing `handle.done()` to return false and throwing "Task not completed" error.
 
 ### 4. Detached Coroutine Memory Management
 **Status:** FIXED
