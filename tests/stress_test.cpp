@@ -38,12 +38,8 @@ int main() {
     setvbuf(stdout, nullptr, _IONBF, 0);
     setvbuf(stderr, nullptr, _IONBF, 0);
 
-    fprintf(stderr, "[main] Starting stress test\n");
-
     // Initialize mutex before any bthread operations
     mutex = std::make_unique<bthread::Mutex>();
-
-    fprintf(stderr, "[main] Mutex initialized\n");
 
     printf("Running stress tests...\n");
 
@@ -89,9 +85,6 @@ int main() {
 
     // Don't reset mutex - bthreads might still be using it
     // The mutex will be destroyed during static destruction after shutdown
-
-    fprintf(stderr, "[main] Calling bthread_shutdown()...\n");
     bthread_shutdown();
-    fprintf(stderr, "[main] bthread_shutdown() returned\n");
     return 0;
 }
