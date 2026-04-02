@@ -701,3 +701,201 @@ while (true) {
 2. **Linux futex 实现**：理解内核如何支持用户态锁
 3. **无锁数据结构**：Treiber 栈、Michael-Scott 队列
 4. **并发控制理论**：锁的实现、公平性、优先级反转
+
+---
+
+## 版本历史（续）
+
+### 2026-04-02: Worker Shutdown 挂起问题
+
+**问题描述：**
+
+程序退出时调用 `bthread_shutdown()` 偶发性挂起（~10% 失败率），部分 worker 线程无法正确退出。
+
+**现象：**
+- 测试通过，但 shutdown 时卡住
+- 部分 worker 打印 "Exiting"，部分没有
+- 问题在 Windows 平台使用 `WaitOnAddress`/`WakeByAddressSingle` 时出现
+
+**调试过程：**
+
+#### 尝试 1：增加 WakeUp 次数和延迟
+
+```cpp
+void Scheduler::Shutdown() {
+    running_.store(false, ...);
+    for (int i = 0; i < 10; ++i) {
+        WakeAllWorkers();
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    // Join workers...
+}
+```
+
+**结果：** 失败率仍约 10%
+
+**分析：** 问题不是唤醒遗漏，而是 worker 对 running 状态的检查存在竞态
+
+#### 尝试 2：分离 running 标志和 sleep_token
+
+原有实现：
+```cpp
+// Worker::Run()
+while (Scheduler::Instance().running()) { ... }
+
+// Worker::WaitForTask()
+platform::FutexWait(&sleep_token_, expected, &ts);
+```
+
+**问题：** `running` 标志和 `sleep_token` 是独立的，可能存在以下竞态：
+
+```
+时间线:
+  Worker                           Scheduler
+  --------                         ----------
+  检查 running=true
+                                   running=false
+                                   WakeAllWorkers()
+                                   (worker 不在等待，唤醒无效)
+  FutexWait()  -- 永久阻塞
+```
+
+#### 尝试 3：参考官方 ParkingLot 实现
+
+查看 `benchmark/official_bthread_reference/parking_lot.h`：
+
+```cpp
+class ParkingLot {
+    // higher 31 bits for signalling, LSB for stopping.
+    butil::atomic<int> _pending_signal;
+
+    void stop() {
+        _pending_signal.fetch_or(1);  // 设置 LSB
+        futex_wake_private(&_pending_signal, 10000);
+    }
+
+    bool stopped() const { return val & 1; }
+};
+```
+
+**关键洞察：**
+- 停止标志和等待 token 合并在同一个原子变量中
+- LSB（最低位）作为停止标志
+- 高 31 位作为唤醒计数器
+
+#### 尝试 4：实现停止标志在 sleep_token 中
+
+```cpp
+// include/bthread/worker.h
+std::atomic<int> sleep_token_{0};
+static constexpr int STOP_FLAG = 1;
+
+bool IsStopped() const {
+    return sleep_token_.load(std::memory_order_acquire) & STOP_FLAG;
+}
+
+void Stop() {
+    sleep_token_.fetch_or(STOP_FLAG, std::memory_order_release);
+    platform::FutexWake(&sleep_token_, 1);
+}
+
+void WakeUp() {
+    sleep_token_.fetch_add(2, std::memory_order_release);  // 加 2，跳过 stop bit
+    platform::FutexWake(&sleep_token_, 1);
+}
+
+void WaitForTask() {
+    int token = sleep_token_.load(std::memory_order_acquire);
+    if (token & STOP_FLAG) return;
+    // ...
+    platform::FutexWait(&sleep_token_, token, &ts);
+}
+```
+
+**结果：** 成功率从 ~0% 提升到 ~90%
+
+**遗留问题：** 仍有 ~10% 失败率
+
+#### 深入分析：Windows WaitOnAddress 的行为
+
+```cpp
+// platform_windows.cpp
+int FutexWait(std::atomic<int>* addr, int expected, const timespec* timeout) {
+    DWORD ms = timeout ? ... : INFINITE;
+    BOOL ok = WaitOnAddress(static_cast<VOID*>(addr), &expected, sizeof(int), ms);
+    // ...
+}
+```
+
+**潜在问题：**
+1. `WaitOnAddress` 比较 `addr` 和 `expected`
+2. 如果值已经改变，应该立即返回
+3. 但在多线程环境下，可能存在时序窗口
+
+**调试输出分析：**
+
+```
+[Worker 0] WaitForTask: waiting (token=40)
+[Worker 0] WaitForTask: woke up (old_token=40, new_token=41, stopped=1)
+[Worker 5] WaitForTask: waiting (token=0)
+[Worker 5] WaitForTask: woke up (old_token=0, new_token=41, stopped=1)
+```
+
+有时 worker 在 token=0 时开始等待（说明它之前没有被唤醒过），这表明唤醒信号可能丢失。
+
+#### 当前状态
+
+**成功率：** ~90%
+
+**已知问题场景：**
+1. Worker 在执行任务时，Stop() 被调用
+2. Stop() 设置标志并唤醒，但 worker 不在 FutexWait 中
+3. Worker 完成任务后重新进入循环，检查 IsStopped()
+4. 但由于某种原因，检查失败或 worker 又进入了 WaitForTask
+
+**待调查方向：**
+1. 是否需要在任务执行后也检查 IsStopped()？
+2. Windows WaitOnAddress 的唤醒语义是否完全正确？
+3. 是否需要类似官方的 interrupt_pthread 机制？
+
+**临时解决方案：**
+- 多次调用 Stop() 并添加延迟
+- 在 Worker::Run() 任务执行后检查 IsStopped()
+
+```cpp
+void Worker::Run() {
+    while (!IsStopped()) {
+        TaskMetaBase* task = PickTask();
+        if (task == nullptr) {
+            if (IsStopped()) break;
+            WaitForTask();
+            if (IsStopped()) break;
+            continue;
+        }
+        // ... 执行任务 ...
+        if (IsStopped()) {
+            HandleTaskAfterRun(completed_task);
+            break;
+        }
+        HandleTaskAfterRun(completed_task);
+    }
+}
+```
+
+**经验教训：**
+
+1. **原子状态和等待对象应该合并**
+   - 分离的 `running` 和 `sleep_token` 导致竞态
+   - 参考官方 ParkingLot 的设计
+
+2. **Windows WaitOnAddress 的特殊行为**
+   - 需要确保值比较在原子读取之后
+   - 可能需要额外同步
+
+3. **检查停止标志的时机**
+   - 不仅在循环开始检查
+   - 任务执行后也应检查
+
+4. **多线程关闭的复杂性**
+   - 官方 bthread 使用 `pthread_kill` 发送信号打断阻塞
+   - Windows 可能需要不同机制
