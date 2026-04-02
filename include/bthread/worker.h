@@ -60,7 +60,9 @@ public:
     void Stop();
 
     // Check if worker is stopped
-    bool IsStopped() const;
+    bool IsStopped() const {
+        return stop_flag_.load(std::memory_order_acquire) != 0;
+    }
 
     // Yield current task
     int YieldCurrent();
@@ -95,12 +97,12 @@ private:
     TaskMetaBase* current_task_{nullptr};
     platform::Context saved_context_{};
 
-    // Sleep state - uses LSB as stop flag (like official bthread ParkingLot)
-    // Bit 0: stop flag (1 = stopped)
-    // Bits 1-31: wakeup counter
-    std::atomic<int> sleep_token_{0};
+    // Stop flag - set to non-zero to stop the worker
+    std::atomic<int> stop_flag_{0};
 
-    static constexpr int STOP_FLAG = 1;
+    // Wake counter - increments on each WakeUp, also increments on Stop
+    // WaitOnAddress on this counter handles races inherently
+    std::atomic<int> wake_count_{0};
 
     static thread_local Worker* current_worker_;
 };

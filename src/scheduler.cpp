@@ -54,26 +54,14 @@ void Scheduler::Shutdown() {
 
     running_.store(false, std::memory_order_release);
 
-    // Stop timer thread first to prevent new timer callbacks
-    if (timer_thread_) {
-        timer_thread_->Stop();
-    }
-
-    // Signal all workers to stop
-    {
+    // Stop all workers multiple times with delays
+    // This ensures the stop flag is set and workers are woken
+    for (int attempt = 0; attempt < 5; ++attempt) {
         std::lock_guard<std::mutex> lock(workers_mutex_);
         for (auto* w : workers_) {
             w->Stop();
         }
-    }
-
-    // Wait and re-signal workers
-    for (int attempt = 0; attempt < 20; ++attempt) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        std::lock_guard<std::mutex> lock(workers_mutex_);
-        for (auto* w : workers_) {
-            w->Stop();
-        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
 
     // Join all workers
@@ -95,6 +83,7 @@ void Scheduler::Shutdown() {
     worker_count_.store(0, std::memory_order_release);
 
     if (timer_thread_) {
+        timer_thread_->Stop();
         timer_thread_.reset();
     }
 }

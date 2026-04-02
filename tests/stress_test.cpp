@@ -89,6 +89,9 @@ int main() {
 
     // Don't reset mutex - bthreads might still be using it
     // The mutex will be destroyed during static destruction after shutdown
+
+    fprintf(stderr, "[main] Calling bthread_shutdown()...\n");
     bthread_shutdown();
+    fprintf(stderr, "[main] bthread_shutdown() returned\n");
     return 0;
 }
