@@ -29,9 +29,16 @@ Worker* Worker::Current() {
     return current_worker_;
 }
 
+bool Worker::IsStopped() const {
+    // Check both local stop flag and global scheduler running flag
+    return (sleep_token_.load(std::memory_order_acquire) & STOP_FLAG) ||
+           !Scheduler::Instance().running();
+}
+
 void Worker::Run() {
     current_worker_ = this;
 
+    int task_count = 0;
     while (!IsStopped()) {
         TaskMetaBase* task = PickTask();
         if (task == nullptr) {
@@ -61,10 +68,15 @@ void Worker::Run() {
         TaskMetaBase* completed_task = current_task_;
         current_task_ = nullptr;
 
-        // Check stopped after running task
-        if (IsStopped()) {
-            HandleTaskAfterRun(completed_task);
-            break;
+        task_count++;
+
+        // Periodically check for stop even when processing many tasks
+        if (task_count >= 10) {
+            task_count = 0;
+            if (IsStopped()) {
+                HandleTaskAfterRun(completed_task);
+                break;
+            }
         }
 
         HandleTaskAfterRun(completed_task);
@@ -129,35 +141,53 @@ void Worker::Resume(TaskMetaBase* task) {
 }
 
 void Worker::WaitForTask() {
-    // Check if stopped first
-    int token = sleep_token_.load(std::memory_order_acquire);
-    if (token & STOP_FLAG) {
-        return;  // Worker is stopped
-    }
-
-    // Double-check for tasks
-    if (!local_queue_.Empty() ||
-        !Scheduler::Instance().global_queue().Empty()) {
-        return;
-    }
-
-    // Sleep using platform futex with timeout
+    // Use very short timeout to frequently check for stop
     platform::timespec ts;
     ts.tv_sec = 0;
-    ts.tv_nsec = 100000000;  // 100ms timeout
-    platform::FutexWait(&sleep_token_, token, &ts);
+    ts.tv_nsec = 5000000;  // 5ms timeout
+
+    // Loop until we get a task or stop signal
+    while (true) {
+        // Check for stop first (use seq_cst for stronger ordering)
+        if (IsStopped()) {
+            return;
+        }
+
+        // Check for tasks
+        if (!local_queue_.Empty() ||
+            !Scheduler::Instance().global_queue().Empty()) {
+            return;
+        }
+
+        int token = sleep_token_.load(std::memory_order_seq_cst);
+        if (token & STOP_FLAG) {
+            return;
+        }
+
+        // Memory barrier to ensure we see any changes
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+
+        // Double-check tasks after barrier
+        if (!local_queue_.Empty() ||
+            !Scheduler::Instance().global_queue().Empty()) {
+            return;
+        }
+
+        // Wait with timeout
+        platform::FutexWait(&sleep_token_, token, &ts);
+    }
 }
 
 void Worker::WakeUp() {
     // Increment counter (bits 1-31), preserve stop flag
     // This ensures the value changes, waking up FutexWait
-    sleep_token_.fetch_add(2, std::memory_order_release);  // Add 2 to skip stop bit
+    sleep_token_.fetch_add(2, std::memory_order_seq_cst);  // Add 2 to skip stop bit
     platform::FutexWake(&sleep_token_, 1);
 }
 
 void Worker::Stop() {
     // Set stop flag (bit 0) and wake up
-    sleep_token_.fetch_or(STOP_FLAG, std::memory_order_release);
+    sleep_token_.fetch_or(STOP_FLAG, std::memory_order_seq_cst);
     platform::FutexWake(&sleep_token_, 1);
 }
 

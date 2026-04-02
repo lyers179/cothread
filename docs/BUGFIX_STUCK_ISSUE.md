@@ -899,3 +899,58 @@ void Worker::Run() {
 4. **多线程关闭的复杂性**
    - 官方 bthread 使用 `pthread_kill` 发送信号打断阻塞
    - Windows 可能需要不同机制
+
+### 2026-04-02: 进一步调试 - 双重停止检查
+
+**尝试的修复：**
+
+1. **增加停止信号重复次数**
+   - 将 Stop() 调用从 5 次增加到 20 次
+   - 每次间隔 10ms
+   - 结果：成功率从 ~60% 提升到 ~70-80%
+
+2. **提前停止 TimerThread**
+   - 在停止 workers 之前先停止 timer_thread_
+   - 防止 timer 回调在 shutdown 期间被调用
+   - 结果：无明显改善
+
+3. **双重停止检查**
+   - Worker::IsStopped() 同时检查 sleep_token_ STOP_FLAG 和 Scheduler::running_
+   - 目的：即使其中一个标志因竞态未看到，另一个也能触发停止
+   - 结果：成功率 ~67-80%，仍有波动
+
+**根本原因分析：**
+
+问题核心是 Windows WaitOnAddress 的唤醒机制存在时序问题：
+
+```
+时间线（可能的竞态）：
+  Worker                           Scheduler
+  --------                         ----------
+  检查 IsStopped() = false
+  检查队列 = 空
+  读取 sleep_token = 0
+                                   Stop(): sleep_token |= 1
+                                   Stop(): FutexWake()
+  WaitOnAddress(addr, 0, ...)     <- WakeByAddressSingle 被错过
+  永久阻塞                          JoinThread() 等待
+```
+
+WaitOnAddress 在调用时比较 *addr 与 expected：
+- 如果匹配，进入等待
+- 如果不匹配，立即返回
+
+关键问题：读取 sleep_token 和调用 WaitOnAddress 之间，Stop() 可能已经设置了标志并调用了 Wake。由于 Wake 在 Wait 之前发生，唤醒信号丢失。
+
+**可能的解决方案：**
+
+1. **使用更长的超时**：FutexWait 使用较短超时（如 50ms），定期检查停止标志
+2. **Windows 特定机制**：使用 Windows 事件对象或条件变量替代 WaitOnAddress
+3. **中断机制**：类似官方 bthread 的 interrupt_pthread，使用 TerminateThread 作为最后手段
+4. **避免 FutexWait**：在 shutdown 期间使用忙等待而非睡眠
+
+**当前状态：**
+
+成功率：~70-80%（不稳定）
+遗留问题：仍有 20-30% 的失败率
+需要进一步调查 Windows WaitOnAddress 的精确语义

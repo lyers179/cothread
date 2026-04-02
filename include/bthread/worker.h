@@ -60,9 +60,7 @@ public:
     void Stop();
 
     // Check if worker is stopped
-    bool IsStopped() const {
-        return sleep_token_.load(std::memory_order_acquire) & STOP_FLAG;
-    }
+    bool IsStopped() const;
 
     // Yield current task
     int YieldCurrent();
