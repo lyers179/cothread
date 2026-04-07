@@ -254,9 +254,10 @@ int Butex::Wait(int expected_value, const platform::timespec* timeout, bool prep
     // Check if Wake happened during CAS
     int current_wake_count = task->wake_count.load(std::memory_order_acquire);
     if (current_wake_count != saved_wake_count) {
-        // Wake happened during or after CAS
-        // Wake either saw us SUSPENDED and set READY, or saw us RUNNING
-        // Either way, we should not suspend
+        // Wake happened - don't suspend
+        // Set READY and enqueue ourselves
+        task->state.store(TaskState::READY, std::memory_order_release);
+        Scheduler::Instance().EnqueueTask(task);
         task->waiting_butex = nullptr;
         task->is_waiting.store(false, std::memory_order_release);
         return 0;
@@ -283,12 +284,12 @@ void Butex::Wake(int count) {
         TaskMeta* waiter = PopFromHead();
         if (!waiter) break;
 
-        // Increment wake_count BEFORE checking state
-        // This allows Wait to detect Wake even if we see RUNNING
-        waiter->wake_count.fetch_add(1, std::memory_order_release);
-
         // Clear is_waiting - task is no longer waiting
         waiter->is_waiting.store(false, std::memory_order_release);
+
+        // Increment wake_count - signals "we saw this task"
+        // Wait will detect this and handle waking itself
+        waiter->wake_count.fetch_add(1, std::memory_order_release);
 
         // Cancel pending timeout
         if (waiter->waiter.timer_id != 0) {
@@ -301,9 +302,9 @@ void Butex::Wake(int count) {
             // Task is suspended, wake it up
             waiter->state.store(TaskState::READY, std::memory_order_release);
             Scheduler::Instance().EnqueueTask(waiter);
-            ++woken;
         }
-        // If not SUSPENDED (RUNNING or READY), Wake already handled it
-        // Wait will see wake_count changed and return
+        // If RUNNING or READY, Wait will handle it
+
+        ++woken;
     }
 }
