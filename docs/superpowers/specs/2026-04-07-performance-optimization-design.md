@@ -1,4 +1,4 @@
-# bthread 性能优化设计 v4
+# bthread 性能优化设计 v5
 
 **日期**: 2026-04-07
 **目标**: 提升任务调度效率、同步原语性能和多核扩展性
@@ -162,7 +162,8 @@ void Butex::AddToTail(TaskMeta* task) {
     WaiterNode* prev = tail_.exchange(node, std::memory_order_acq_rel);
 
     // CRITICAL: Check again after exchange - Wake could have cleared is_waiting
-    if (!task->is_waiting.load(std::memory_order_relaxed)) {
+    // Use acquire to synchronize with Wake's release store
+    if (!task->is_waiting.load(std::memory_order_acquire)) {
         // Wake cleared is_waiting during the exchange, mark node as claimed
         // so future PopFromHead will skip it
         node->claimed.store(true, std::memory_order_release);
@@ -210,9 +211,22 @@ void Butex::AddToHead(TaskMeta* task) {
         if (head_.compare_exchange_strong(old_head, node,
                 std::memory_order_release, std::memory_order_relaxed)) {
             // CAS succeeded - check is_waiting one more time
-            if (!task->is_waiting.load(std::memory_order_relaxed)) {
-                // Wake cleared is_waiting during CAS, need to roll back
-                // Set node as claimed so it will be skipped
+            // Use acquire to synchronize with Wake's release store
+            if (!task->is_waiting.load(std::memory_order_acquire)) {
+                // Wake cleared is_waiting during CAS
+                // Check if Wake already set state to READY
+                TaskState state = task->state.load(std::memory_order_acquire);
+                if (state == TaskState::READY || state == TaskState::RUNNING) {
+                    // Wake already consumed this node, no need to rollback
+                    // Node is orphaned in queue but marked as claimed below
+                    // PopFromHead will skip it when it reaches this node
+                    node->claimed.store(true, std::memory_order_release);
+                    return;
+                }
+
+                // Wake cleared is_waiting but hasn't set state yet
+                // Wait() will check is_waiting and state before suspending
+                // Mark node as claimed so it will be skipped
                 node->claimed.store(true, std::memory_order_release);
 
                 // Roll back head to old_head (best effort)
@@ -333,8 +347,11 @@ void Butex::Wake(int count) {
 | `tail_.exchange` | `acq_rel` | 建立producer/consumer同步，确保prev->next可见 |
 | `prev->next.store` | `release` | 发布新节点 |
 | `head_.compare_exchange` | `acq_rel` | 推进head，同时提供访问head->data的屏障 |
-| `is_waiting.*` | `acq_rel` | 防止Wait/Wake竞态 |
+| `is_waiting` second check (AddToTail/AddToHead) | `acquire` | 同步Wake的release存储 |
+| `is_waiting` first check (AddToTail/AddToHead) | `relaxed` | 早期检查，后续有更强的屏障 |
+| `is_waiting.*` in Wait() | `acq_rel` | 防止Wait/Wake竞态 |
 | `claimed.exchange` | `acq_rel` | 防止重复消费 |
+| `Wake clears is_waiting` | `release` | 同步到AddToHead/AddToTail的acquire读取 |
 
 ---
 
