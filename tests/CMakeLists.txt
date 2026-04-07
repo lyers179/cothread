@@ -21,6 +21,7 @@ set(TEST_SOURCES
     mutex_bench_test.cpp
     mpsc_queue_test.cpp
     worker_batch_test.cpp
+    xmm_test.cpp
 )
 
 foreach(test_source ${TEST_SOURCES})
