@@ -99,11 +99,9 @@ int Worker::YieldCurrent() {
 
     current_task_->state.store(TaskState::READY, std::memory_order_release);
 
-    // Add to batch instead of queue
-    local_batch_[batch_count_++] = current_task_;
-
-    // Flush if batch is full
-    MaybeFlushBatch();
+    // Directly push to queue instead of batch
+    // Batch can cause deadlock when PickTask() returns nullptr without checking batch
+    local_queue_.Push(current_task_);
 
     SuspendCurrent();
     return 0;
@@ -140,7 +138,11 @@ TaskMetaBase* Worker::PickTask() {
         return local_batch_[--batch_count_];
     }
 
-    // 3. Try global queue
+    // 3. Try global queue - also check if there are tasks in batch
+    // to avoid losing tasks that were just yielded
+    if (batch_count_ > 0) {
+        return local_batch_[--batch_count_];
+    }
     task = Scheduler::Instance().global_queue().Pop();
     if (task) return task;
 
