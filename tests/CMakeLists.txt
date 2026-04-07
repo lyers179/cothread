@@ -19,6 +19,7 @@ set(TEST_SOURCES
     diag_mutex.cpp
     minimal_test.cpp
     mutex_bench_test.cpp
+    mpsc_queue_test.cpp
 )
 
 foreach(test_source ${TEST_SOURCES})
