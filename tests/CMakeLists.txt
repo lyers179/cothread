@@ -20,6 +20,7 @@ set(TEST_SOURCES
     minimal_test.cpp
     mutex_bench_test.cpp
     mpsc_queue_test.cpp
+    worker_batch_test.cpp
 )
 
 foreach(test_source ${TEST_SOURCES})
