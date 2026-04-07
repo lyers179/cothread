@@ -14,6 +14,12 @@ namespace bthread {
 class Worker;
 struct TaskMeta;  // Forward declare for WaiterState
 
+// WaiterNode - lock-free queue node (inline in TaskMeta)
+struct WaiterNode {
+    std::atomic<WaiterNode*> next{nullptr};
+    std::atomic<bool> claimed{false};  // Prevents double consumption
+};
+
 // bthread handle type (legacy compatibility)
 using bthread_t = uint64_t;
 
@@ -22,7 +28,7 @@ using bthread_t = uint64_t;
 struct WaiterState {
     std::atomic<TaskMeta*> next{nullptr};
     std::atomic<TaskMeta*> prev{nullptr};  // For doubly-linked list
-    std::atomic<bool> in_queue{false};     // True if task is currently in wait queue
+    // std::atomic<bool> in_queue{false};     // REMOVED - replaced by is_waiting
     std::atomic<bool> wakeup{false};
     std::atomic<bool> timed_out{false};
     int64_t deadline_us{0};
@@ -64,6 +70,10 @@ struct TaskMeta : TaskMetaBase {
     // ========== Butex Wait State (bthread-specific) ==========
     void* waiting_butex{nullptr};  ///< Butex pointer if waiting on one
     WaiterState waiter;
+
+    // ========== Lock-Free Wait Queue ==========
+    std::atomic<bool> is_waiting{false};  // Prevents ABA, replaces in_queue
+    WaiterNode waiter_node;               // Inline node, no dynamic alloc
 
     // ========== Worker Affinity (bthread-specific) ==========
     Worker* local_worker{nullptr};  ///< Worker affinity for task execution
