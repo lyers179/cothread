@@ -94,18 +94,57 @@ void Worker::RunCoroutine(coro::CoroutineMeta* meta) {
     }
 }
 
+int Worker::YieldCurrent() {
+    if (!current_task_) return EINVAL;
+
+    current_task_->state.store(TaskState::READY, std::memory_order_release);
+
+    // Add to batch instead of queue
+    local_batch_[batch_count_++] = current_task_;
+
+    // Flush if batch is full
+    MaybeFlushBatch();
+
+    SuspendCurrent();
+    return 0;
+}
+
+void Worker::MaybeFlushBatch() {
+    if (batch_count_ >= BATCH_SIZE) {
+        for (int i = 0; i < batch_count_; ++i) {
+            local_queue_.Push(local_batch_[i]);
+        }
+        batch_count_ = 0;
+    }
+}
+
 TaskMetaBase* Worker::PickTask() {
-    TaskMetaBase* task;
+    // 1. Try batch first (LIFO for cache locality)
+    if (batch_count_ > 0) {
+        return local_batch_[--batch_count_];
+    }
 
-    // 1. Local queue (returns TaskMetaBase*)
-    task = local_queue_.Pop();
-    if (task) return task;
+    // 2. Try local queue with batch prefill
+    TaskMetaBase* task = local_queue_.Pop();
+    if (task) {
+        local_batch_[batch_count_++] = task;
+        // Prefill batch
+        for (int i = 0; i < BATCH_SIZE - 1 && batch_count_ < BATCH_SIZE; ++i) {
+            TaskMetaBase* t2 = local_queue_.Pop();
+            if (t2) {
+                local_batch_[batch_count_++] = t2;
+            } else {
+                break;
+            }
+        }
+        return local_batch_[--batch_count_];
+    }
 
-    // 2. Global queue (returns TaskMetaBase*)
+    // 3. Try global queue
     task = Scheduler::Instance().global_queue().Pop();
     if (task) return task;
 
-    // 3. Random work stealing
+    // 4. Try work stealing
     int32_t wc = Scheduler::Instance().worker_count();
     if (wc <= 1) return nullptr;
 
@@ -178,15 +217,6 @@ void Worker::Stop() {
     wake_count_.fetch_add(1, std::memory_order_release);
     // Use WakeByAddressAll to wake all waiting workers
     platform::FutexWake(&wake_count_, 2);
-}
-
-int Worker::YieldCurrent() {
-    if (!current_task_) return EINVAL;
-
-    current_task_->state.store(TaskState::READY, std::memory_order_release);
-    local_queue_.Push(current_task_);
-    SuspendCurrent();
-    return 0;
 }
 
 void Worker::HandleTaskAfterRun(TaskMetaBase* task) {

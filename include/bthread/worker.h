@@ -67,6 +67,9 @@ public:
     // Yield current task
     int YieldCurrent();
 
+    // Batch management
+    void MaybeFlushBatch();
+
     // Accessors
     int id() const { return id_; }
     TaskMetaBase* current_task() const { return current_task_; }
@@ -79,6 +82,8 @@ public:
     static Worker* Current();
 
 private:
+    static constexpr int BATCH_SIZE = 8;
+
     // Handle task after it finishes running
     void HandleTaskAfterRun(TaskMetaBase* task);
 
@@ -96,6 +101,10 @@ private:
     WorkStealingQueue local_queue_;
     TaskMetaBase* current_task_{nullptr};
     platform::Context saved_context_{};
+
+    // Batch for reducing queue operations
+    TaskMetaBase* local_batch_[BATCH_SIZE];
+    int batch_count_{0};
 
     // Stop flag - set to non-zero to stop the worker
     std::atomic<int> stop_flag_{0};
