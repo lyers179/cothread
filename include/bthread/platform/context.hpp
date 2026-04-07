@@ -69,8 +69,9 @@ extern "C" void MakeContext(Context* ctx, void* stack, size_t stack_size,
  *
  * @param from Location to save current context
  * @param to Context to switch to
+ * @param to_uses_xmm If non-null, task->uses_xmm for lazy XMM saving
  */
-extern "C" void SwapContext(Context* from, Context* to);
+extern "C" void SwapContext(Context* from, Context* to, bool* to_uses_xmm = nullptr);
 
 // ============ Thread Management ============
 

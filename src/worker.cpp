@@ -84,7 +84,7 @@ void Worker::Run() {
 }
 
 void Worker::RunBthread(TaskMeta* task) {
-    platform::SwapContext(&saved_context_, &task->context);
+    platform::SwapContext(&saved_context_, &task->context, &task->uses_xmm);
 }
 
 void Worker::RunCoroutine(coro::CoroutineMeta* meta) {
@@ -168,7 +168,7 @@ TaskMetaBase* Worker::PickTask() {
 void Worker::SuspendCurrent() {
     // For bthread, swap back to worker context
     if (current_task_->type == TaskType::BTHREAD) {
-        platform::SwapContext(&static_cast<TaskMeta*>(current_task_)->context, &saved_context_);
+        platform::SwapContext(&static_cast<TaskMeta*>(current_task_)->context, &saved_context_, nullptr);
     }
     // For coroutine, the handle naturally returns to the caller
 }
