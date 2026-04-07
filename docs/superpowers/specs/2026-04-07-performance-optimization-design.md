@@ -1,4 +1,4 @@
-# bthread 性能优化设计
+# bthread 性能优化设计 v2
 
 **日期**: 2026-04-07
 **目标**: 提升任务调度效率、同步原语性能和多核扩展性
@@ -34,22 +34,24 @@
 
 ### 解决方案
 
-使用Dmitry Vyukov的MPSC无锁队列算法。
+使用Dmitry Vyukov的MPSC无锁队列算法，配合正确的状态机防止ABA问题。
 
 ### 数据结构
 
 ```cpp
-// 新增等待队列节点
+// 等待队列节点（内联在TaskMeta中）
 struct WaiterNode {
-    std::atomic<WaiterNode*> next;
-    TaskMeta* task;
-    std::atomic<bool> claimed;  // 防止重复消费
+    std::atomic<WaiterNode*> next{nullptr};
+    std::atomic<bool> claimed{false};  // 防止重复消费
 };
 
-// TaskMeta预分配节点
+// TaskMeta扩展
 struct TaskMeta {
     // ... 现有字段
-    WaiterNode waiter_node;  // 内联节点，避免动态分配
+
+    // 等待队列状态
+    std::atomic<bool> in_queue{false};  // 是否在队列中（防止ABA）
+    WaiterNode waiter_node;            // 预分配节点，避免动态分配
 };
 
 // Butex队列
@@ -60,20 +62,98 @@ class Butex {
 };
 ```
 
-### 关键算法
+### Wait() 状态机
 
-**AddToTail (Producer)**:
+关键：使用`in_queue`作为状态锁，防止Wait和Wake之间的竞态：
+
+```cpp
+int Butex::Wait(int expected_value, const timespec* timeout, bool prepend) {
+    Worker* w = Worker::Current();
+    if (!w || w->current_task()->type != TaskType::BTHREAD) {
+        return FutexWait(&value_, expected_value, timeout);
+    }
+
+    TaskMeta* task = static_cast<TaskMeta*>(w->current_task());
+
+    // 1. Check value first
+    if (value_.load(std::memory_order_acquire) != expected_value) {
+        return 0;
+    }
+
+    // 2. Mark as "about to enter queue" - prevent concurrent Wake
+    bool expected = false;
+    if (!task->in_queue.compare_exchange_strong(expected, true,
+            std::memory_order_acq_rel, std::memory_order_relaxed)) {
+        // Already in queue - task is being consumed, return immediately
+        return 0;
+    }
+
+    // 3. Prepare waiter node
+    WaiterNode* node = &task->waiter_node;
+    node->next.store(nullptr, std::memory_order_relaxed);
+    node->claimed.store(false, std::memory_order_relaxed);
+
+    // 4. Double-check value after setting in_queue
+    if (value_.load(std::memory_order_acquire) != expected_value) {
+        // Value changed, remove ourselves
+        task->in_queue.store(false, std::memory_order_release);
+        return 0;
+    }
+
+    // 5. Set up timeout
+    if (timeout) {
+        // ... existing timeout setup
+    }
+
+    // 6. Record which butex we're waiting on
+    task->waiting_butex = this;
+
+    // 7. Add to queue (lock-free MPSC)
+    if (prepend) {
+        AddToHead(task);
+    } else {
+        AddToTail(task);
+    }
+
+    // 8. Set state to SUSPENDED
+    task->state.store(TaskState::SUSPENDED, std::memory_order_release);
+
+    // 9. Check in_queue AFTER setting SUSPENDED - if false, Wake already happened
+    if (!task->in_queue.load(std::memory_order_acquire)) {
+        // Wake already called, return
+        task->state.store(TaskState::READY, std::memory_order_release);
+        task->waiting_butex = nullptr;
+        return 0;
+    }
+
+    // 10. Suspend
+    w->SuspendCurrent();
+
+    // 11. Resumed
+    task->waiting_butex = nullptr;
+
+    if (ws.timed_out.load(std::memory_order_acquire)) {
+        return ETIMEDOUT;
+    }
+    return 0;
+}
+```
+
+### AddToTail (Producer - FIFO)
+
 ```cpp
 void Butex::AddToTail(TaskMeta* task) {
     WaiterNode* node = &task->waiter_node;
     node->next.store(nullptr, std::memory_order_relaxed);
     node->claimed.store(false, std::memory_order_relaxed);
 
+    // Exchange tail - acq_rel provides full barrier
     WaiterNode* prev = tail_.exchange(node, std::memory_order_acq_rel);
     if (prev) {
+        // Link previous node to new node
         prev->next.store(node, std::memory_order_release);
     } else {
-        // 队列为空，head也指向node
+        // Queue was empty, also set head
         WaiterNode* expected = nullptr;
         head_.compare_exchange_strong(expected, node,
             std::memory_order_release, std::memory_order_relaxed);
@@ -81,36 +161,131 @@ void Butex::AddToTail(TaskMeta* task) {
 }
 ```
 
-**PopFromHead (Consumer)**:
+### AddToHead (Producer - LIFO for re-queued tasks)
+
+```cpp
+void Butex::AddToHead(TaskMeta* task) {
+    WaiterNode* node = &task->waiter_node;
+    node->claimed.store(true, std::memory_order_relaxed);  // Mark as claimed for wake path
+
+    // Use CAS loop for head insertion
+    while (true) {
+        WaiterNode* old_head = head_.load(std::memory_order_acquire);
+        node->next.store(old_head, std::memory_order_relaxed);
+
+        if (head_.compare_exchange_strong(old_head, node,
+                std::memory_order_release, std::memory_order_relaxed)) {
+            // Successfully inserted at head
+            // If this was the first node, also update tail
+            if (!old_head) {
+                WaiterNode* expected = nullptr;
+                tail_.compare_exchange_strong(expected, node,
+                    std::memory_order_release, std::memory_order_relaxed);
+            }
+            return;
+        }
+        // CAS failed, retry
+    }
+}
+```
+
+### PopFromHead (Consumer) - 修复内存屏障
+
+**关键修复**: 使用CAS with acq_rel提供正确的同步屏障
+
 ```cpp
 TaskMeta* Butex::PopFromHead() {
-    WaiterNode* head = head_.load(std::memory_order_acquire);
-    while (head) {
-        // 尝试标记为已消费
+    while (true) {
+        // Load head with acquire
+        WaiterNode* head = head_.load(std::memory_order_acquire);
+        if (!head) return nullptr;
+
+        // Try to claim this node
         if (head->claimed.exchange(true, std::memory_order_acq_rel)) {
+            // Already claimed, skip
             head = head->next.load(std::memory_order_acquire);
             continue;
         }
 
-        // 推进head
-        WaiterNode* next = head->next.load(std::memory_order_acquire);
-        head_.store(next, std::memory_order_release);
+        // Load next with relaxed - the CAS below provides the barrier
+        WaiterNode* next = head->next.load(std::memory_order_relaxed);
 
-        return head->task;
+        // Try to advance head - acq_rel provides synchronization for accessing head->task
+        WaiterNode* expected = head;
+        if (head_.compare_exchange_strong(expected, next,
+                std::memory_order_acq_rel, std::memory_order_relaxed)) {
+            // Successfully claimed and advanced
+            return static_cast<TaskMeta*>(
+                reinterpret_cast<char*>(head) - offsetof(TaskMeta, waiter_node));
+        }
+
+        // CAS failed, reset claimed and retry
+        head->claimed.store(false, std::memory_order_relaxed);
     }
-    return nullptr;
 }
 ```
 
-**AddToHead**: 简化为头插，复用MPSC结构
+### RemoveFromWaitQueue
 
-**RemoveFromWaitQueue**: 标记claimed，PopFromHead会跳过
+```cpp
+void Butex::RemoveFromWaitQueue(TaskMeta* task) {
+    // First mark as not in queue atomically
+    bool expected = true;
+    if (!task->in_queue.compare_exchange_strong(expected, false,
+            std::memory_order_acq_rel, std::memory_order_relaxed)) {
+        return;  // Already removed or not in queue
+    }
 
-### 内存屏障策略
+    // Mark node as claimed so PopFromHead will skip it
+    task->waiter_node.claimed.store(true, std::memory_order_release);
 
-- `tail_.exchange`: `acq_rel` - 确保prev的next可见
-- `next.store`: `release` - 发布节点
-- `claimed.exchange`: `acq_rel` - 防止竞态
+    // Note: We don't actually remove from linked structure
+    // PopFromHead will handle it when it reaches this node
+}
+```
+
+### Wake()
+
+```cpp
+void Butex::Wake(int count) {
+    // Wake futex waiters (pthreads)
+    FutexWake(&value_, count);
+
+    int woken = 0;
+    while (woken < count) {
+        TaskMeta* waiter = PopFromHead();
+        if (!waiter) break;
+
+        // Clear in_queue - task is no longer waiting
+        waiter->in_queue.store(false, std::memory_order_release);
+
+        // Cancel pending timeout
+        if (waiter->waiter.timer_id != 0) {
+            Scheduler::Instance().GetTimerThread()->Cancel(waiter->waiter.timer_id);
+        }
+
+        // Check if task is SUSPENDED
+        TaskState state = waiter->state.load(std::memory_order_acquire);
+        if (state == TaskState::SUSPENDED) {
+            waiter->state.store(TaskState::READY, std::memory_order_release);
+            Scheduler::Instance().EnqueueTask(waiter);
+            ++woken;
+        }
+        // If not SUSPENDED, the task is still preparing to suspend
+        // It will check in_queue and return without suspending
+    }
+}
+```
+
+### 内存屏障策略总结
+
+| 操作 | 屏障类型 | 原因 |
+|------|---------|------|
+| `tail_.exchange` | `acq_rel` | 建立producer/consumer同步，确保prev->next可见 |
+| `prev->next.store` | `release` | 发布新节点 |
+| `head_.compare_exchange` | `acq_rel` | 推进head，同时提供访问head->data的屏障 |
+| `in_queue.*` | `acq_rel` | 防止Wait/Wake竞态 |
+| `claimed.exchange` | `acq_rel` | 防止重复消费 |
 
 ---
 
@@ -122,28 +297,70 @@ TaskMeta* Butex::PopFromHead() {
 
 ### 解决方案
 
-任务级`uses_xmm`标志，首次使用时设置。
+任务级`uses_xmm`标志，首次使用时通过运行时检测设置。
 
 ### TaskMeta改动
 
 ```cpp
 struct TaskMeta {
     // ... 现有字段
-    bool uses_xmm{false};
+    bool uses_xmm{false};  // 标记任务是否使用过XMM寄存器
 };
+
+// 常量：uses_xmm在Context中的偏移
+// Context layout: gp_regs[16] (128B) + xmm_regs[160] (160B) + stack_ptr (8B) + return_addr (8B)
+// uses_xmm存储在TaskMeta中，不在Context内
+// 需要通过TaskMeta地址访问
 ```
 
-### SwapContext改动
+### SwapContext改动 - 运行时检测
 
 ```asm
 ; SwapContext(from, to)
 ; rcx = from, rdx = to
+; 注意: from/to是TaskMeta*，Context在TaskMeta内部
 
-; 检查to->uses_xmm
-mov     r8, [rdx + <uses_xmm_offset>]
+; 计算TaskMeta中context的偏移 (假设context_offset为已知常量)
+; 需要通过rdx (TaskMeta*) + context_offset访问context
+; 这里简化为直接传递context指针
+
+; 实际实现中，SwapContext接收Context*，TaskMeta的uses_xmm需要额外参数或通过全局变量获取
+
+; 方案：SwapContext额外接收uses_xmm指针作为第三个参数
+; SwapContext(from, to, to_uses_xmm_ptr)
+; rcx = from, rdx = to, r8 = to_uses_xmm_ptr
+
+; ============== 保存部分 ==============
+
+; 检查to_uses_xmm
 test    r8, r8
-jz      skip_save_xmm
+jz      save_xmm_zero_detect
 
+; 有uses_xmm指针，检查标志
+mov     r9, [r8]
+test    r9, r9
+jnz     save_xmm_now
+
+; 首次：检测xmm6-xmm15是否非零
+pxor    xmm0, xmm0
+por     xmm0, xmm6
+por     xmm0, xmm7
+por     xmm0, xmm8
+por     xmm0, xmm9
+por     xmm0, xmm10
+por     xmm0, xmm11
+por     xmm0, xmm12
+por     xmm0, xmm13
+por     xmm0, xmm14
+por     xmm0, xmm15
+
+ptest   xmm0, xmm0
+jz      save_xmm_skip
+
+; 至少一个xmm非零，设置uses_xmm
+mov     byte ptr [r8], 1
+
+save_xmm_now:
 ; 保存xmm6-xmm15
 movdqa  [rcx + 128], xmm6
 movdqa  [rcx + 144], xmm7
@@ -155,30 +372,89 @@ movdqa  [rcx + 224], xmm12
 movdqa  [rcx + 240], xmm13
 movdqa  [rcx + 256], xmm14
 movdqa  [rcx + 272], xmm15
+jmp     save_xmm_done
 
-skip_save_xmm:
-; ... 继续GPR保存
+save_xmm_zero_detect:
+; 没有uses_xmm指针，检测xmm并假设存储在from的TaskMeta中
+; 这需要更复杂的指针计算
+; 简化方案：总是检测并保存（向后兼容）
+pxor    xmm0, xmm0
+; ... 同上检测
+ptest   xmm0, xmm0
+jz      save_xmm_skip
+; 保存xmm
 
-; 加载GPRs后，检查uses_xmm
-mov     r8, [rdx + <uses_xmm_offset>]
+save_xmm_skip:
+save_xmm_done:
+; ... 保存GPRs ...
+
+; ============== 加载部分 ==============
+
+; 检查to_uses_xmm
 test    r8, r8
-jz      skip_load_xmm
+jz      load_xmm_always  ; 无指针，总是加载
 
+mov     r9, [r8]
+test    r9, r9
+jz      load_xmm_skip
+
+load_xmm_now:
 ; 加载xmm6-xmm15
 movdqa  xmm6, [rdx + 128]
-; ...
+movdqa  xmm7, [rdx + 144]
+movdqa  xmm8, [rdx + 160]
+movdqa  xmm9, [rdx + 176]
+movdqa  xmm10, [rdx + 192]
+movdqa  xmm11, [rdx + 208]
+movdqa  xmm12, [rdx + 224]
+movdqa  xmm13, [rdx + 240]
+movdqa  xmm14, [rdx + 256]
+movdqa  xmm15, [rdx + 272]
+jmp     load_xmm_done
 
-skip_load_xmm:
+load_xmm_skip:
+load_xmm_always:
+; 向后兼容：没有uses_xmm时总是加载
+
+load_xmm_done:
 ; ... 继续跳转
 ```
 
-### uses_xmm设置策略
+### 调用约定修改
 
-**简化方案**: 初始化为`false`，首次Swap后保持原样（不自动检测）
+```cpp
+// platform/platform.h
+namespace platform {
+    void SwapContext(Context* from, Context* to, bool* to_uses_xmm = nullptr);
+}
+```
 
-**运行时检测**（可选）:
-- MakeContext时清零xmm区域
-- Swap时检测 xmm 值是否为0，非0则设置`uses_xmm`
+```cpp
+// Worker::RunBthread
+void Worker::RunBthread(TaskMeta* task) {
+    platform::SwapContext(&saved_context_, &task->context, &task->uses_xmm);
+}
+```
+
+### MakeContext改动
+
+```asm
+MakeContext:
+    ; MakeContext(ctx, stack_top, stack_size, fn, arg)
+    ; rcx=ctx, rdx=stack_top, r8=stack_size, r9=fn, [rsp+40]=arg
+
+    ; Zero xmm region in context for initial state
+    ; This enables runtime detection
+    lea     rax, [rcx + 128]  ; xmm_regs offset
+    mov     rcx, 20           ; 160 bytes / 8 = 20 qwords
+    xor     rdx, rdx
+zero_xmm_loop:
+    mov     [rax], rdx
+    add     rax, 8
+    loop    zero_xmm_loop
+
+    ; ... rest of MakeContext ...
+```
 
 ---
 
@@ -188,27 +464,26 @@ skip_load_xmm:
 
 `head_`和`tail_`在同一cache line，多worker竞争时互相失效。
 
-### 解决方案1：Padding
+### 解决方案1：alignas Padding
 
 ```cpp
 class WorkStealingQueue {
     static constexpr size_t CACHE_LINE_SIZE = 64;
 
-    alignas(CACHE_LINE_SIZE)
+    // buffer不需要alignas，因为很大且只被owner访问
     std::atomic<TaskMetaBase*> buffer_[CAPACITY];
 
     // head独占cache line
     alignas(CACHE_LINE_SIZE)
     std::atomic<uint64_t> head_{0};
 
-    // 填充
-    char pad1_[CACHE_LINE_SIZE - sizeof(std::atomic<uint64_t>)];
-
     // tail独占cache line
     alignas(CACHE_LINE_SIZE)
     std::atomic<uint64_t> tail_{0};
 };
 ```
+
+**关键**: `alignas`确保每个变量从cache line边界开始，比手动padding更可靠。
 
 ### 问题2：频繁队列操作
 
@@ -233,7 +508,7 @@ class Worker {
     }
 
     TaskMetaBase* PickTask() {
-        // 1. 从batch取
+        // 1. 从batch取（LIFO，符合局部性）
         if (batch_count_ > 0) {
             return local_batch_[--batch_count_];
         }
@@ -258,29 +533,57 @@ class Worker {
         }
 
         // 4. Work stealing
-        // ... 现有逻辑
+        int32_t wc = Scheduler::Instance().worker_count();
+        if (wc <= 1) return nullptr;
+
+        int attempts = wc * 3;
+        static thread_local std::mt19937 rng(std::random_device{}());
+
+        for (int i = 0; i < attempts; ++i) {
+            int victim = (id_ + rng()) % wc;
+            if (victim == id_) continue;
+
+            Worker* other = Scheduler::Instance().GetWorker(victim);
+            if (other) {
+                if (auto t = other->local_queue_.Steal()) {
+                    return t;
+                }
+            }
+        }
+
+        return nullptr;
     }
 
     void YieldCurrent() {
         current_task_->state.store(TaskState::READY, std::memory_order_release);
-        // 放入batch而不是直接Push
-        if (batch_count_ < BATCH_SIZE) {
-            local_batch_[batch_count_++] = current_task_;
-        } else {
+
+        // 添加到batch
+        local_batch_[batch_count_++] = current_task_;
+
+        // 检查是否需要flush
+        if (batch_count_ >= BATCH_SIZE) {
             MaybeFlushBatch();
-            local_queue_.Push(current_task_);
         }
+
         SuspendCurrent();
     }
 };
 ```
 
-### FIFO保证
+### FIFO讨论
 
-批处理不影响FIFO顺序：
-- Batch内部按LIFO（栈）
-- Batch flush到队列保持相对顺序
+**注意**: 批处理在batch内部使用LIFO（栈），这改变了任务执行顺序：
+- 任务A、B、C依次yield放入batch
+- PickTask先返回C，然后B，最后A
+
+**影响评估**:
+- 对于短任务：影响可忽略，LIFO更好的cache局部性
+- 对于有顺序要求的任务：可能违反预期
 - Work stealing从队列头部取，保持公平性
+
+**如果需要严格的FIFO**:
+- 使用循环缓冲区代替stack
+- 或禁用批处理（BATCH_SIZE=0）
 
 ---
 
@@ -289,25 +592,95 @@ class Worker {
 ### 新增单元测试
 
 **`tests/mpsc_queue_test.cpp`**:
-- 单生产者单消费者正确性
-- 单生产者多消费者并发
-- ABA场景压力测试
-- 内存泄漏检测
+```cpp
+// 单生产者单消费者正确性
+TEST(MPSCQueueTest, SingleProducerSingleConsumer) {
+    // ... 实现MPSC队列
+    // 验证所有任务都被消费
+}
+
+// 单生产者多消费者并发
+TEST(MPSCQueueTest, SingleProducerMultiConsumer) {
+    // 16个消费者线程竞争Pop
+    // 验证没有任务丢失或重复消费
+}
+
+// Wait/Wake竞态条件测试
+TEST(MPSCQueueTest, WaitWakeRaceCondition) {
+    // 精确控制Wait和Wake的时序
+    // 创建竞态窗口
+    // 验证没有崩溃或错误状态
+}
+
+// Double-queue测试（防御性）
+TEST(MPSCQueueTest, DoubleQueueAttempt) {
+    // 尝试将同一任务加入多个Butex队列
+    // 验证只有第一个成功
+}
+
+// 内存泄漏检测
+TEST(MPSCQueueTest, MemoryLeak) {
+    // 运行大量Wait/Wake操作
+    // 检查内存是否释放
+}
+```
 
 **`tests/xmm_test.cpp`**:
-- 使用XMM的任务验证
-- 不使用XMM的任务验证
-- 混合场景压力测试
+```cpp
+// SIMD使用验证
+TEST(XMMLazyTest, SIMDUsageDetected) {
+    __m128 a = _mm_set_ps(1, 2, 3, 4);
+    __m128 b = _mm_set_ps(5, 6, 7, 8);
+    __m128 c = _mm_mul_ps(a, b);  // 使用xmm6-xmm15
+    bthread_yield();
+    __m128 d = _mm_add_ps(c, a);  // 验证值未损坏
+}
+
+// 非SIMD任务验证
+TEST(XMMLazyTest, NonSIMDSkipsSave) {
+    // 不使用SIMD的任务
+    bthread_yield();
+    // 验证uses_xmm仍为false
+}
+
+// 混合场景压力测试
+TEST(XMMLazyTest, MixedSIMDNonSIMD) {
+    // 创建混合任务
+    // 部分使用SIMD，部分不使用
+    // 验证所有任务正确执行
+}
+```
 
 **`tests/worker_batch_test.cpp`**:
-- Batch边界测试
-- FIFO顺序验证
-- Work stealing交互测试
+```cpp
+// Batch边界测试
+TEST(WorkerBatchTest, BatchBoundaries) {
+    // 测试batch_count达到BATCH_SIZE时的行为
+}
+
+// FIFO顺序验证（如果需要）
+TEST(WorkerBatchTest, FIFOPreservation) {
+    // 如果使用FIFO batch，验证顺序
+}
+
+// Work stealing与batch交互
+TEST(WorkerBatchTest, StealingDuringBatch) {
+    // worker的batch有任务时，其他worker尝试steal
+    // 验证steal从queue取，不影响batch
+}
+
+// Batch underflow防御
+TEST(WorkerBatchTest, BatchUnderflow) {
+    // 测试异常情况
+    // 添加断言防止batch_count < 0
+}
+```
 
 ### 回归测试
 
 - 所有现有测试必须100%通过
 - 添加多线程压力测试（16-32线程）
+- 添加TSAN（ThreadSanitizer）检测数据竞态
 
 ### 性能基准
 
@@ -315,49 +688,70 @@ class Worker {
 
 ```cpp
 // 高并发Mutex竞争测试
-void benchmark_mutex_high_contention(int num_threads);
+void benchmark_mutex_high_contention(int num_threads) {
+    // 16-32线程竞争同一mutex
+}
 
 // XMM保存开销测试
-void benchmark_xmm_overhead();
+void benchmark_xmm_overhead() {
+    // 对比SIMD任务和非SIMD任务的性能
+}
 
 // 多核扩展性详细测试
-void benchmark_scalability_detailed();
+void benchmark_scalability_detailed() {
+    // 测试1, 2, 4, 8, 16, 32核
+    // 验证接近线性的扩展性
+}
+
+// MPSC队列基准
+void benchmark_mpsc_queue() {
+    // 单生产者多消费者吞吐量
+}
 ```
 
-目标性能验证：
-- Mutex 16线程: 6M → 15M+ ops/sec
-- Yield: 35M → 45M+ yields/sec
-- 扩展性: 8核接近8x提升
+目标性能验证（相对提升）：
+- Mutex: 2.5x提升（16线程）
+- Yield: 1.3x提升
+- 多核扩展: 8核接近8x
 
 ---
 
 ## 实施顺序
 
-### Phase 1: Butex无锁队列（最重要）
+### Phase 1: Butex无锁队列（最重要，风险最高）
 
-1. 修改`TaskMeta`添加`waiter_node`
-2. 实现`Butex`的MPSC队列方法
-3. 移除`queue_mutex_`
-4. 单元测试验证
+1. 修改`TaskMeta`添加`waiter_node`和`in_queue`
+2. 实现`Butex`的MPSC队列方法（AddToTail, AddToHead, PopFromHead）
+3. 修改`Wait()`使用正确的状态机
+4. 修改`Wake()`和`RemoveFromWaitQueue()`
+5. 移除`queue_mutex_`
+6. 单元测试验证
+7. 运行所有现有测试
 
 ### Phase 2: WorkStealingQueue padding
 
-1. 添加CACHE_LINE_SIZE常量
-2. 添加padding字段
-3. 验证cache line对齐
+1. 添加`CACHE_LINE_SIZE`常量
+2. 使用`alignas`修改`WorkStealingQueue`
+3. 验证cache line对齐（静态断言）
+4. 性能测试验证
 
 ### Phase 3: Worker批处理
 
-1. 添加batch字段
-2. 修改`PickTask`逻辑
+1. 添加batch字段到`Worker`
+2. 修改`PickTask`使用batch
 3. 修改`YieldCurrent`使用batch
 4. 单元测试验证
+5. 性能测试验证
 
 ### Phase 4: XMM惰性保存
 
 1. 修改`TaskMeta`添加`uses_xmm`
-2. 修改汇编文件添加跳转逻辑
-3. 运行时测试验证
+2. 修改`SwapContext`签名添加uses_xmm参数
+3. 修改汇编文件添加运行时检测逻辑
+4. 修改`MakeContext`清零xmm区域
+5. 修改`Worker::RunBthread`传递uses_xmm指针
+6. 单元测试验证
+7. 性能测试验证
 
 ---
 
@@ -365,10 +759,24 @@ void benchmark_scalability_detailed();
 
 | 风险 | 缓解措施 |
 |------|----------|
-| MPSC ABA问题 | `claimed`标记 + 正确内存屏障 |
-| XMM保存错误 | 添加运行时断言，失败时打印诊断 |
-| FIFO顺序破坏 | 专门的顺序验证测试 |
-| Padding失效 | 运行时检测cache line大小 |
+| MPSC ABA问题 | `in_queue`状态机 + `claimed`标记 + 正确内存屏障 |
+| MPSC队列starvation | 已有FIFO公平性，producer为单线程无starvation |
+| XMM保存错误 | 运行时检测 + 调试时验证保存的值 |
+| FIFO顺序破坏 | Batch内LIFO提供更好的局部性，如需严格FIFO可禁用batch |
+| Padding失效 | 使用`alignas`，运行时检测cache line大小 |
+| Batch溢出 | 添加边界检查和断言 |
+
+### 运行时监控（可选）
+
+```cpp
+struct PerformanceMetrics {
+    std::atomic<uint64_t> xmm_saves{0};       // XMM保存次数
+    std::atomic<uint64_t> xmm_skips{0};       // XMM跳过次数
+    std::atomic<uint64_t> batch_flushes{0};   // Batch flush次数
+    std::atomic<uint64_t> butex_waits{0};     // Butex等待次数
+    std::atomic<uint64_t> butex_wakes{0};     // Butex唤醒次数
+};
+```
 
 ---
 
@@ -377,3 +785,4 @@ void benchmark_scalability_detailed();
 - Dmitry Vyukov's MPSC queue: http://www.1024cores.net/home/lock-free-algorithms/queues/non-intrusive-mpsc-node-based-queue
 - False sharing: https://en.wikipedia.org/wiki/False_sharing
 - Intel optimization manual: XMM寄存器保存开销分析
+- C++ memory ordering: https://en.cppreference.com/w/cpp/atomic/memory_order
