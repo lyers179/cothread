@@ -12,82 +12,140 @@ using namespace bthread::platform;
 Butex::Butex() = default;
 Butex::~Butex() = default;
 
-void Butex::AddToHead(TaskMeta* waiter) {
-    std::lock_guard<std::mutex> lock(queue_mutex_);
-    waiter->waiter.next.store(head_, std::memory_order_relaxed);
-    waiter->waiter.prev.store(nullptr, std::memory_order_relaxed);
-    if (head_) {
-        head_->waiter.prev.store(waiter, std::memory_order_relaxed);
-    } else {
-        tail_ = waiter;  // Queue was empty
-    }
-    head_ = waiter;
-    waiter->waiter.in_queue.store(true, std::memory_order_release);
-}
-
-void Butex::AddToTail(TaskMeta* waiter) {
-    std::lock_guard<std::mutex> lock(queue_mutex_);
-    waiter->waiter.next.store(nullptr, std::memory_order_relaxed);
-    waiter->waiter.prev.store(tail_, std::memory_order_relaxed);
-    if (tail_) {
-        tail_->waiter.next.store(waiter, std::memory_order_relaxed);
-    } else {
-        head_ = waiter;  // Queue was empty
-    }
-    tail_ = waiter;
-    waiter->waiter.in_queue.store(true, std::memory_order_release);
-}
-
-void Butex::RemoveFromWaitQueue(TaskMeta* waiter) {
-    std::lock_guard<std::mutex> lock(queue_mutex_);
-
-    // Check if still in queue (may have been removed by PopFromHead)
-    if (!waiter->waiter.in_queue.load(std::memory_order_acquire)) {
-        return;  // Already removed
+void Butex::AddToTail(TaskMeta* task) {
+    // Verify task is still supposed to be in queue
+    if (!task->is_waiting.load(std::memory_order_relaxed)) {
+        return;
     }
 
-    TaskMeta* prev = waiter->waiter.prev.load(std::memory_order_relaxed);
-    TaskMeta* next = waiter->waiter.next.load(std::memory_order_relaxed);
+    WaiterNode* node = &task->waiter_node;
+    node->next.store(nullptr, std::memory_order_relaxed);
+    node->claimed.store(false, std::memory_order_relaxed);
+
+    // Exchange tail - acq_rel provides full barrier
+    WaiterNode* prev = tail_.exchange(node, std::memory_order_acq_rel);
+
+    // Check again after exchange - Wake could have cleared is_waiting
+    // Use acquire to synchronize with Wake's release store
+    if (!task->is_waiting.load(std::memory_order_acquire)) {
+        node->claimed.store(true, std::memory_order_release);
+        return;
+    }
 
     if (prev) {
-        prev->waiter.next.store(next, std::memory_order_relaxed);
+        prev->next.store(node, std::memory_order_release);
     } else {
-        head_ = next;
+        WaiterNode* expected = nullptr;
+        head_.compare_exchange_strong(expected, node,
+            std::memory_order_release, std::memory_order_relaxed);
+    }
+}
+
+void Butex::AddToHead(TaskMeta* task) {
+    if (!task->is_waiting.load(std::memory_order_relaxed)) {
+        return;
     }
 
-    if (next) {
-        next->waiter.prev.store(prev, std::memory_order_relaxed);
-    } else {
-        tail_ = prev;
-    }
+    WaiterNode* node = &task->waiter_node;
+    // Don't set claimed=true - Wait() already initializes it to false
 
-    // Clear links and mark as not in queue
-    waiter->waiter.next.store(nullptr, std::memory_order_relaxed);
-    waiter->waiter.prev.store(nullptr, std::memory_order_relaxed);
-    waiter->waiter.in_queue.store(false, std::memory_order_release);
+    // Use CAS loop for head insertion
+    while (true) {
+        WaiterNode* old_head = head_.load(std::memory_order_acquire);
+
+        // Check is_waiting before CAS - Wake could have cleared it
+        if (!task->is_waiting.load(std::memory_order_relaxed)) {
+            return;
+        }
+
+        node->next.store(old_head, std::memory_order_relaxed);
+
+        if (head_.compare_exchange_strong(old_head, node,
+                std::memory_order_release, std::memory_order_relaxed)) {
+            // CAS succeeded - check is_waiting one more time
+            // Use acquire to synchronize with Wake's release store
+            if (!task->is_waiting.load(std::memory_order_acquire)) {
+                // Wake cleared is_waiting during CAS
+                // Check if Wake already set state to READY
+                TaskState state = task->state.load(std::memory_order_acquire);
+                if (state == TaskState::READY || state == TaskState::RUNNING) {
+                    // Wake already consumed this node, no need to rollback
+                    // Node is orphaned in queue but marked as claimed below
+                    // PopFromHead will skip it when it reaches this node
+                    node->claimed.store(true, std::memory_order_release);
+                    return;
+                }
+
+                // Wake cleared is_waiting but hasn't set state yet
+                // Wait() will check is_waiting and state before suspending
+                // Mark node as claimed so it will be skipped
+                node->claimed.store(true, std::memory_order_release);
+
+                // Roll back head to old_head (best effort)
+                // Note: Another thread might have advanced head already
+                WaiterNode* expected = node;
+                head_.compare_exchange_strong(expected, old_head,
+                    std::memory_order_release, std::memory_order_relaxed);
+
+                return;
+            }
+
+            // Successfully inserted at head
+            // If this was the first node, also update tail
+            if (!old_head) {
+                WaiterNode* expected = nullptr;
+                tail_.compare_exchange_strong(expected, node,
+                    std::memory_order_release, std::memory_order_relaxed);
+            }
+            return;
+        }
+        // CAS failed, retry
+    }
 }
 
 TaskMeta* Butex::PopFromHead() {
-    std::lock_guard<std::mutex> lock(queue_mutex_);
-    if (!head_) {
-        return nullptr;
+    while (true) {
+        // Load head with acquire
+        WaiterNode* head = head_.load(std::memory_order_acquire);
+        if (!head) return nullptr;
+
+        // Try to claim this node
+        if (head->claimed.exchange(true, std::memory_order_acq_rel)) {
+            // Already claimed, skip
+            head = head->next.load(std::memory_order_acquire);
+            continue;
+        }
+
+        // Load next with relaxed - the CAS below provides the barrier
+        WaiterNode* next = head->next.load(std::memory_order_relaxed);
+
+        // Try to advance head - acq_rel provides synchronization for accessing head->task
+        WaiterNode* expected = head;
+        if (head_.compare_exchange_strong(expected, next,
+                std::memory_order_acq_rel, std::memory_order_relaxed)) {
+            // Successfully claimed and advanced
+            return reinterpret_cast<TaskMeta*>(
+                reinterpret_cast<char*>(head) - offsetof(TaskMeta, waiter_node));
+        }
+
+        // CAS failed, reset claimed and retry
+        head->claimed.store(false, std::memory_order_relaxed);
+    }
+}
+
+void Butex::RemoveFromWaitQueue(TaskMeta* task) {
+    // First mark as not waiting atomically
+    bool expected = true;
+    if (!task->is_waiting.compare_exchange_strong(expected, false,
+            std::memory_order_acq_rel, std::memory_order_relaxed)) {
+        return;  // Already removed or not in queue
     }
 
-    TaskMeta* waiter = head_;
-    head_ = waiter->waiter.next.load(std::memory_order_relaxed);
+    // Mark node as claimed so PopFromHead will skip it
+    task->waiter_node.claimed.store(true, std::memory_order_release);
 
-    if (head_) {
-        head_->waiter.prev.store(nullptr, std::memory_order_relaxed);
-    } else {
-        tail_ = nullptr;  // Queue is now empty
-    }
-
-    // Clear links and mark as not in queue
-    waiter->waiter.next.store(nullptr, std::memory_order_relaxed);
-    waiter->waiter.prev.store(nullptr, std::memory_order_relaxed);
-    waiter->waiter.in_queue.store(false, std::memory_order_release);
-
-    return waiter;
+    // Note: We don't actually remove from linked structure
+    // PopFromHead will handle it when it reaches this node
 }
 
 void Butex::TimeoutCallback(void* arg) {
@@ -138,105 +196,99 @@ int Butex::Wait(int expected_value, const platform::timespec* timeout, bool prep
         return 0;
     }
 
-    // 2. Initialize wait state in TaskMeta
-    WaiterState& ws = task->waiter;
-    ws.wakeup.store(false, std::memory_order_relaxed);
-    ws.timed_out.store(false, std::memory_order_relaxed);
-    ws.in_queue.store(false, std::memory_order_relaxed);
-    ws.deadline_us = 0;
-    ws.timer_id = 0;
-    ws.next.store(nullptr, std::memory_order_relaxed);
-    ws.prev.store(nullptr, std::memory_order_relaxed);
-
-    // 3. Add to wait queue (prepend to head or append to tail)
-    if (prepend) {
-        AddToHead(task);
-    } else {
-        AddToTail(task);
+    // 2. Mark as "about to enter queue" - prevent concurrent Wake
+    bool expected = false;
+    if (!task->is_waiting.compare_exchange_strong(expected, true,
+            std::memory_order_acq_rel, std::memory_order_relaxed)) {
+        // Already waiting - task is being consumed, return immediately
+        return 0;
     }
 
-    // 4. Double-check value after adding to queue
+    // 3. Prepare waiter node
+    WaiterNode* node = &task->waiter_node;
+    node->next.store(nullptr, std::memory_order_relaxed);
+    node->claimed.store(false, std::memory_order_relaxed);
+
+    // 4. Double-check value after setting is_waiting
     if (value_.load(std::memory_order_acquire) != expected_value) {
-        // Value changed, remove ourselves from queue
-        RemoveFromWaitQueue(task);
+        // Value changed, remove ourselves
+        task->is_waiting.store(false, std::memory_order_release);
         return 0;
     }
 
     // 5. Set up timeout
     if (timeout) {
-        ws.deadline_us = platform::GetTimeOfDayUs() +
-            (static_cast<int64_t>(timeout->tv_sec) * 1000000 +
-             timeout->tv_nsec / 1000);
-
         platform::timespec ts = *timeout;
-        ws.timer_id = Scheduler::Instance().GetTimerThread()->Schedule(
+        task->waiter.deadline_us = platform::GetTimeOfDayUs() +
+            (static_cast<int64_t>(ts.tv_sec) * 1000000 +
+             ts.tv_nsec / 1000);
+        task->waiter.timer_id = Scheduler::Instance().GetTimerThread()->Schedule(
             TimeoutCallback, task, &ts);
     }
 
     // 6. Record which butex we're waiting on
     task->waiting_butex = this;
 
-    // 7. Set state to SUSPENDED
-    task->state.store(TaskState::SUSPENDED, std::memory_order_release);
-
-    // 8. Check wakeup flag AFTER setting SUSPENDED
-    if (ws.wakeup.load(std::memory_order_acquire)) {
-        // Wake already called
-        task->state.store(TaskState::READY, std::memory_order_release);
-        task->waiting_butex = nullptr;
-        // Remove from queue if still there
-        RemoveFromWaitQueue(task);
-        // Cancel timer if any
-        if (ws.timer_id != 0) {
-            Scheduler::Instance().GetTimerThread()->Cancel(ws.timer_id);
-        }
-        return 0;
+    // 7. Add to queue (lock-free MPSC)
+    if (prepend) {
+        AddToHead(task);
+    } else {
+        AddToTail(task);
     }
 
-    // 9. Suspend - we'll be resumed by Wake or timeout
+    // 8. Set state to SUSPENDED
+    task->state.store(TaskState::SUSPENDED, std::memory_order_release);
+
+    // 9. Check if Wake already happened - must check BOTH is_waiting and state
+    if (!task->is_waiting.load(std::memory_order_acquire)) {
+        // Wake cleared is_waiting, check if it transitioned state
+        TaskState state = task->state.load(std::memory_order_acquire);
+        if (state != TaskState::SUSPENDED) {
+            // Wake already set us to READY or other state, don't suspend
+            task->waiting_butex = nullptr;
+            return 0;
+        }
+        // is_waiting cleared but state still SUSPENDED - Wake is in progress
+        // Continue to suspend - Wake will set us READY
+    }
+
+    // 10. Suspend
     w->SuspendCurrent();
 
-    // 10. Resumed - check result
+    // 11. Resumed
     task->waiting_butex = nullptr;
 
-    if (ws.timed_out.load(std::memory_order_acquire)) {
+    if (task->waiter.timed_out.load(std::memory_order_acquire)) {
         return ETIMEDOUT;
     }
     return 0;
 }
 
 void Butex::Wake(int count) {
-    // Wake futex waiters (pthreads waiting via FutexWait)
+    // Wake futex waiters (pthreads)
     platform::FutexWake(&value_, count);
 
     int woken = 0;
-
     while (woken < count) {
-        // Always pop from head (FIFO order for fairness)
         TaskMeta* waiter = PopFromHead();
         if (!waiter) break;
 
-        WaiterState& ws = waiter->waiter;
+        // Clear is_waiting - task is no longer waiting
+        waiter->is_waiting.store(false, std::memory_order_release);
 
-        // Check if already woken/timed out
-        bool expected = false;
-        if (ws.wakeup.compare_exchange_strong(expected, true,
-                std::memory_order_acq_rel, std::memory_order_relaxed)) {
-            ++woken;
-
-            // Cancel pending timeout
-            if (ws.timer_id != 0) {
-                Scheduler::Instance().GetTimerThread()->Cancel(ws.timer_id);
-            }
-
-            // Check if task is SUSPENDED - only then re-queue it
-            TaskState state = waiter->state.load(std::memory_order_acquire);
-            if (state == TaskState::SUSPENDED) {
-                waiter->state.store(TaskState::READY, std::memory_order_release);
-                Scheduler::Instance().EnqueueTask(waiter);
-            }
-            // If not SUSPENDED, the task is still preparing to suspend
-            // It will check wakeup and return without suspending
+        // Cancel pending timeout
+        if (waiter->waiter.timer_id != 0) {
+            Scheduler::Instance().GetTimerThread()->Cancel(waiter->waiter.timer_id);
         }
+
+        // Check if task is SUSPENDED
+        TaskState state = waiter->state.load(std::memory_order_acquire);
+        if (state == TaskState::SUSPENDED) {
+            waiter->state.store(TaskState::READY, std::memory_order_release);
+            Scheduler::Instance().EnqueueTask(waiter);
+            ++woken;
+        }
+        // If not SUSPENDED, the task is still preparing to suspend
+        // It will check is_waiting and return without suspending
     }
 }
