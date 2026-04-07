@@ -296,3 +296,72 @@ assert(ret == EBUSY);
 | global_queue_test | ✅ 通过 | 全局任务队列测试 |
 | task_group_test | ✅ 通过 | 任务池管理测试 |
 | work_stealing_queue_test | ✅ 通过 | 工作窃取队列测试 |
+
+## 运行时动态库问题
+
+### 问题描述
+
+在运行编译好的测试程序时，可能会遇到以下错误：
+
+```
+Exit code: 127
+Exit code: -1073741511 (STATUS_DLL_NOT_FOUND)
+Exit code: 0xC0000139 (STATUS_ENTRY_POINT_NOT_FOUND)
+```
+
+### 原因分析
+
+这是因为 MinGW64 编译的程序需要以下运行时 DLL：
+
+- `libgcc_s_seh-1.dll` - GCC 运行时库
+- `libstdc++-6.dll` - C++ 标准库
+- `libwinpthread-1.dll` - POSIX 线程库
+
+如果这些 DLL 不在 PATH 中，或者 PATH 中有其他版本的相同 DLL（如 Git Bash 的 `E:\Git\mingw64\bin`），程序会加载错误的 DLL 导致崩溃。
+
+### 解决方案
+
+**确保 MinGW64 的 bin 目录在 PATH 的最前面：**
+
+**PowerShell:**
+```powershell
+$env:Path = "C:\mingw64\mingw64\bin;C:\mingw64\bin;C:\Windows\System32;" + $env:Path
+.\tests\bthread_test.exe
+```
+
+**CMD:**
+```cmd
+set PATH=C:\mingw64\mingw64\bin;C:\mingw64\bin;C:\Windows\System32;%PATH%
+.\tests\bthread_test.exe
+```
+
+**Git Bash:**
+```bash
+# Git Bash 可能在 PATH 中放了自己的 MinGW，需要确保系统 MinGW 优先
+export PATH="/c/mingw64/bin:$PATH"
+./tests/bthread_test.exe
+```
+
+### 验证方法
+
+1. 检查当前 PATH 中 MinGW 的位置：
+```cmd
+echo %PATH% | findstr /i "mingw"
+```
+
+2. 确认正确的 DLL 正在被加载：
+```cmd
+where libgcc_s_seh-1.dll
+where libstdc++-6.dll
+```
+
+应该输出 `C:\mingw64\bin\libgcc_s_seh-1.dll` 而不是其他路径。
+
+### 永久解决方案
+
+将 MinGW64 添加到系统环境变量中，并确保它在所有其他 MinGW 之前：
+
+1. 打开"系统属性" → "高级" → "环境变量"
+2. 在"系统变量"中找到 `Path`
+3. 编辑，将 `C:\mingw64\mingw64\bin` 和 `C:\mingw64\bin` 移动到列表最前面
+4. 重启命令行窗口使更改生效
