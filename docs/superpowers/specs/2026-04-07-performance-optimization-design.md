@@ -1,4 +1,4 @@
-# bthread 性能优化设计 v2
+# bthread 性能优化设计 v3
 
 **日期**: 2026-04-07
 **目标**: 提升任务调度效率、同步原语性能和多核扩展性
@@ -50,8 +50,8 @@ struct TaskMeta {
     // ... 现有字段
 
     // 等待队列状态
-    std::atomic<bool> in_queue{false};  // 是否在队列中（防止ABA）
-    WaiterNode waiter_node;            // 预分配节点，避免动态分配
+    std::atomic<bool> is_waiting{false};  // 是否正在等待（防止ABA）
+    WaiterNode waiter_node;               // 预分配节点，避免动态分配
 };
 
 // Butex队列
@@ -64,7 +64,7 @@ class Butex {
 
 ### Wait() 状态机
 
-关键：使用`in_queue`作为状态锁，防止Wait和Wake之间的竞态：
+关键：使用`is_waiting`作为状态锁，防止Wait和Wake之间的竞态：
 
 ```cpp
 int Butex::Wait(int expected_value, const timespec* timeout, bool prepend) {
@@ -82,9 +82,9 @@ int Butex::Wait(int expected_value, const timespec* timeout, bool prepend) {
 
     // 2. Mark as "about to enter queue" - prevent concurrent Wake
     bool expected = false;
-    if (!task->in_queue.compare_exchange_strong(expected, true,
+    if (!task->is_waiting.compare_exchange_strong(expected, true,
             std::memory_order_acq_rel, std::memory_order_relaxed)) {
-        // Already in queue - task is being consumed, return immediately
+        // Already waiting - task is being consumed, return immediately
         return 0;
     }
 
@@ -93,10 +93,10 @@ int Butex::Wait(int expected_value, const timespec* timeout, bool prepend) {
     node->next.store(nullptr, std::memory_order_relaxed);
     node->claimed.store(false, std::memory_order_relaxed);
 
-    // 4. Double-check value after setting in_queue
+    // 4. Double-check value after setting is_waiting
     if (value_.load(std::memory_order_acquire) != expected_value) {
         // Value changed, remove ourselves
-        task->in_queue.store(false, std::memory_order_release);
+        task->is_waiting.store(false, std::memory_order_release);
         return 0;
     }
 
@@ -118,12 +118,17 @@ int Butex::Wait(int expected_value, const timespec* timeout, bool prepend) {
     // 8. Set state to SUSPENDED
     task->state.store(TaskState::SUSPENDED, std::memory_order_release);
 
-    // 9. Check in_queue AFTER setting SUSPENDED - if false, Wake already happened
-    if (!task->in_queue.load(std::memory_order_acquire)) {
-        // Wake already called, return
-        task->state.store(TaskState::READY, std::memory_order_release);
-        task->waiting_butex = nullptr;
-        return 0;
+    // 9. Check if Wake already happened - must check BOTH is_waiting and state
+    if (!task->is_waiting.load(std::memory_order_acquire)) {
+        // Wake cleared is_waiting, check if it transitioned state
+        TaskState state = task->state.load(std::memory_order_acquire);
+        if (state != TaskState::SUSPENDED) {
+            // Wake already set us to READY or other state, don't suspend
+            task->waiting_butex = nullptr;
+            return 0;
+        }
+        // is_waiting cleared but state still SUSPENDED - Wake is in progress
+        // Continue to suspend - Wake will set us READY
     }
 
     // 10. Suspend
@@ -143,6 +148,12 @@ int Butex::Wait(int expected_value, const timespec* timeout, bool prepend) {
 
 ```cpp
 void Butex::AddToTail(TaskMeta* task) {
+    // Verify task is still supposed to be in queue
+    if (!task->is_waiting.load(std::memory_order_relaxed)) {
+        // Task already removed by Wake, don't add
+        return;
+    }
+
     WaiterNode* node = &task->waiter_node;
     node->next.store(nullptr, std::memory_order_relaxed);
     node->claimed.store(false, std::memory_order_relaxed);
@@ -161,16 +172,30 @@ void Butex::AddToTail(TaskMeta* task) {
 }
 ```
 
-### AddToHead (Producer - LIFO for re-queued tasks)
+### AddToHead (Producer - LIFO for first-time waiters)
+
+**注意**: `prepend=true`用于首次等待（官方bthread的first_wait=LIFO优化），不用于re-queue。
 
 ```cpp
 void Butex::AddToHead(TaskMeta* task) {
+    // Verify task is still supposed to be in queue
+    if (!task->is_waiting.load(std::memory_order_relaxed)) {
+        // Task already removed by Wake, don't add
+        return;
+    }
+
     WaiterNode* node = &task->waiter_node;
-    node->claimed.store(true, std::memory_order_relaxed);  // Mark as claimed for wake path
+    // Don't set claimed=true - Wait() already initialized it to false
 
     // Use CAS loop for head insertion
     while (true) {
         WaiterNode* old_head = head_.load(std::memory_order_acquire);
+
+        // Double-check is_waiting in the loop (Wake could have cleared it)
+        if (!task->is_waiting.load(std::memory_order_relaxed)) {
+            return;
+        }
+
         node->next.store(old_head, std::memory_order_relaxed);
 
         if (head_.compare_exchange_strong(old_head, node,
@@ -229,9 +254,9 @@ TaskMeta* Butex::PopFromHead() {
 
 ```cpp
 void Butex::RemoveFromWaitQueue(TaskMeta* task) {
-    // First mark as not in queue atomically
+    // First mark as not waiting atomically
     bool expected = true;
-    if (!task->in_queue.compare_exchange_strong(expected, false,
+    if (!task->is_waiting.compare_exchange_strong(expected, false,
             std::memory_order_acq_rel, std::memory_order_relaxed)) {
         return;  // Already removed or not in queue
     }
@@ -256,8 +281,8 @@ void Butex::Wake(int count) {
         TaskMeta* waiter = PopFromHead();
         if (!waiter) break;
 
-        // Clear in_queue - task is no longer waiting
-        waiter->in_queue.store(false, std::memory_order_release);
+        // Clear is_waiting - task is no longer waiting
+        waiter->is_waiting.store(false, std::memory_order_release);
 
         // Cancel pending timeout
         if (waiter->waiter.timer_id != 0) {
@@ -272,7 +297,7 @@ void Butex::Wake(int count) {
             ++woken;
         }
         // If not SUSPENDED, the task is still preparing to suspend
-        // It will check in_queue and return without suspending
+        // It will check is_waiting and return without suspending
     }
 }
 ```
@@ -284,7 +309,7 @@ void Butex::Wake(int count) {
 | `tail_.exchange` | `acq_rel` | 建立producer/consumer同步，确保prev->next可见 |
 | `prev->next.store` | `release` | 发布新节点 |
 | `head_.compare_exchange` | `acq_rel` | 推进head，同时提供访问head->data的屏障 |
-| `in_queue.*` | `acq_rel` | 防止Wait/Wake竞态 |
+| `is_waiting.*` | `acq_rel` | 防止Wait/Wake竞态 |
 | `claimed.exchange` | `acq_rel` | 防止重复消费 |
 
 ---
@@ -720,7 +745,7 @@ void benchmark_mpsc_queue() {
 
 ### Phase 1: Butex无锁队列（最重要，风险最高）
 
-1. 修改`TaskMeta`添加`waiter_node`和`in_queue`
+1. 修改`TaskMeta`添加`waiter_node`和`is_waiting`
 2. 实现`Butex`的MPSC队列方法（AddToTail, AddToHead, PopFromHead）
 3. 修改`Wait()`使用正确的状态机
 4. 修改`Wake()`和`RemoveFromWaitQueue()`
@@ -759,7 +784,7 @@ void benchmark_mpsc_queue() {
 
 | 风险 | 缓解措施 |
 |------|----------|
-| MPSC ABA问题 | `in_queue`状态机 + `claimed`标记 + 正确内存屏障 |
+| MPSC ABA问题 | `is_waiting`状态机 + `claimed`标记 + 正确内存屏障 |
 | MPSC队列starvation | 已有FIFO公平性，producer为单线程无starvation |
 | XMM保存错误 | 运行时检测 + 调试时验证保存的值 |
 | FIFO顺序破坏 | Batch内LIFO提供更好的局部性，如需严格FIFO可禁用batch |
