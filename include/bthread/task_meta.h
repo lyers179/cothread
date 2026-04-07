@@ -75,6 +75,9 @@ struct TaskMeta : TaskMetaBase {
     std::atomic<bool> is_waiting{false};  // Prevents ABA, replaces in_queue
     WaiterNode waiter_node;               // Inline node, no dynamic alloc
 
+    // ========== XMM Lazy Saving ==========
+    bool uses_xmm{false};  // True if task uses SIMD (xmm6-xmm15)
+
     // ========== Worker Affinity (bthread-specific) ==========
     Worker* local_worker{nullptr};  ///< Worker affinity for task execution
 
