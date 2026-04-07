@@ -9,6 +9,13 @@
 
 namespace bthread {
 
+// Forward declarations
+class Worker;
+struct TaskMeta;
+
+// WaiterNode forward declaration
+struct WaiterNode;
+
 // Butex - binary mutex for bthread synchronization
 // Supports FIFO (append) and LIFO (prepend) wait queue ordering
 class Butex {
@@ -33,6 +40,11 @@ public:
     void set_value(int v) { value_.store(v, std::memory_order_release); }
 
 private:
+    // Lock-free MPSC queue
+    std::atomic<WaiterNode*> head_{nullptr};
+    std::atomic<WaiterNode*> tail_{nullptr};
+    std::atomic<int> value_{0};
+
     // Add waiter to head (LIFO) - used for re-queueing woken threads
     void AddToHead(TaskMeta* waiter);
 
@@ -47,11 +59,6 @@ private:
 
     // Timeout callback
     static void TimeoutCallback(void* arg);
-
-    std::mutex queue_mutex_;  // Protects queue operations
-    TaskMeta* head_{nullptr};  // Head of wait queue
-    TaskMeta* tail_{nullptr};  // Tail of wait queue
-    std::atomic<int> value_{0};
 };
 
 } // namespace bthread
