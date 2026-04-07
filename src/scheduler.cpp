@@ -132,6 +132,9 @@ void Scheduler::Submit(TaskMetaBase* task) {
     Worker* current = Worker::Current();
     if (current) {
         current->local_queue().Push(task);
+        // Wake up idle workers if we just pushed to a worker that might be sleeping
+        // This handles the case where the current worker is about to suspend/go idle
+        WakeIdleWorkers(1);
     } else {
         // Not in a worker thread, push to global queue
         global_queue_.Push(task);
