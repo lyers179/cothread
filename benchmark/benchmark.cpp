@@ -397,6 +397,87 @@ void benchmark_producer_consumer(int num_producers, int num_consumers, int items
 
 // ==================== Main ====================
 
+// High-contention mutex benchmark
+void benchmark_mutex_high_contention(int num_threads) {
+    fprintf(stderr, "\n[Benchmark: High Contention Mutex]\n");
+    fprintf(stderr, "  Threads: %d, Iterations: 10000\n", num_threads);
+
+    bthread::Mutex mtx;
+    std::atomic<int> counter{0};
+    std::vector<bthread_t> tids(num_threads);
+
+    // Allocate args array to avoid dangling pointers
+    std::vector<std::pair<bthread::Mutex*, std::atomic<int>*>> args_array;
+    for (int i = 0; i < num_threads; ++i) {
+        args_array.push_back({&mtx, &counter});
+    }
+
+    Timer timer;
+
+    auto task = [](void* arg) {
+        auto* p = static_cast<std::pair<bthread::Mutex*, std::atomic<int>*>*>(arg);
+        for (int i = 0; i < 10000; ++i) {
+            p->first->lock();
+            p->second->fetch_add(1, std::memory_order_relaxed);
+            p->first->unlock();
+        }
+        return nullptr;
+    };
+
+    for (int i = 0; i < num_threads; ++i) {
+        bthread_create(&tids[i], nullptr, task, &args_array[i]);
+    }
+
+    for (int i = 0; i < num_threads; ++i) {
+        bthread_join(tids[i], nullptr);
+    }
+
+    double elapsed = timer.elapsed_ms();
+    int ops = counter.load();
+    fprintf(stderr, "  Total ops: %d\n", ops);
+    fprintf(stderr, "  Time: %.2f ms\n", elapsed);
+    fprintf(stderr, "  Throughput: %.0f ops/sec\n", ops / (elapsed / 1000.0));
+}
+
+// Scalability benchmark
+void benchmark_scalability_detailed() {
+    fprintf(stderr, "\n[Benchmark: Scalability Detailed]\n");
+    int worker_counts[] = {1, 2, 4, 8, 16};
+    int num_configs = sizeof(worker_counts) / sizeof(worker_counts[0]);
+
+    fprintf(stderr, "  %-10s %-12s %-12s\n", "Workers", "Time(ms)", "Ops/sec");
+    fprintf(stderr, "  %-10s %-12s %-12s\n", "------", "-------", "-------");
+
+    for (int c = 0; c < num_configs; ++c) {
+        int workers = worker_counts[c];
+        bthread_set_worker_count(workers);
+
+        const int N = 10000;
+        std::atomic<int> counter{0};
+        std::vector<bthread_t> tids(N);
+
+        Timer timer;
+
+        for (int i = 0; i < N; ++i) {
+            bthread_create(&tids[i], nullptr, [](void* arg) {
+                static_cast<std::atomic<int>*>(arg)->fetch_add(1, std::memory_order_relaxed);
+                return nullptr;
+            }, &counter);
+        }
+
+        for (int i = 0; i < N; ++i) {
+            bthread_join(tids[i], nullptr);
+        }
+
+        double elapsed = timer.elapsed_ms();
+        double ops = N / (elapsed / 1000.0);
+
+        fprintf(stderr, "  %-10d %-12.2f %-12.0f\n", workers, elapsed, ops);
+
+        bthread_shutdown();
+    }
+}
+
 int main(int argc, char* argv[]) {
     setvbuf(stdout, nullptr, _IONBF, 0);
     setvbuf(stderr, nullptr, _IONBF, 0);
@@ -417,6 +498,10 @@ int main(int argc, char* argv[]) {
     benchmark_scalability();               // Test scaling
     benchmark_stack(10, 10);               // Memory pressure
     benchmark_producer_consumer(2, 2, 10);// Producer-consumer
+
+    // New optimization benchmarks
+    benchmark_mutex_high_contention(16);   // High contention
+    benchmark_scalability_detailed();      // Detailed scalability
 
     fprintf(stderr, "\n========================================\n");
     fprintf(stderr, "       Benchmark Complete!\n");
