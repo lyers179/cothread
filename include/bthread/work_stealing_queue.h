@@ -22,6 +22,7 @@ namespace bthread {
 class WorkStealingQueue {
 public:
     static constexpr size_t CAPACITY = 1024;
+    static constexpr size_t CACHE_LINE_SIZE = 64;
 
     WorkStealingQueue();
     ~WorkStealingQueue() = default;
@@ -62,7 +63,13 @@ private:
     }
 
     std::atomic<TaskMetaBase*> buffer_[CAPACITY];
+
+    // head on its own cache line
+    alignas(CACHE_LINE_SIZE)
     std::atomic<uint64_t> head_{0};  // [version:32 | index:32]
+
+    // tail on its own cache line
+    alignas(CACHE_LINE_SIZE)
     std::atomic<uint64_t> tail_{0};  // [version:32 | index:32]
 };
 
