@@ -43,8 +43,7 @@ extern "C" {
 void MakeContext(Context* ctx, void* stack, size_t stack_size, ThreadFunc fn, void* arg);
 
 // Swap contexts: saves current context to 'from', loads 'to'
-// If to_uses_xmm is non-null, task->uses_xmm for lazy XMM saving
-void SwapContext(Context* from, Context* to, bool* to_uses_xmm = nullptr);
+void SwapContext(Context* from, Context* to);
 
 } // extern "C"
 

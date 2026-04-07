@@ -84,7 +84,7 @@ void Worker::Run() {
 }
 
 void Worker::RunBthread(TaskMeta* task) {
-    platform::SwapContext(&saved_context_, &task->context, &task->uses_xmm);
+    platform::SwapContext(&saved_context_, &task->context);
 }
 
 void Worker::RunCoroutine(coro::CoroutineMeta* meta) {
@@ -99,9 +99,11 @@ int Worker::YieldCurrent() {
 
     current_task_->state.store(TaskState::READY, std::memory_order_release);
 
-    // Directly push to queue instead of batch
-    // Batch can cause deadlock when PickTask() returns nullptr without checking batch
-    local_queue_.Push(current_task_);
+    // Add to batch instead of queue
+    local_batch_[batch_count_++] = current_task_;
+
+    // Flush if batch is full
+    MaybeFlushBatch();
 
     SuspendCurrent();
     return 0;
@@ -138,11 +140,7 @@ TaskMetaBase* Worker::PickTask() {
         return local_batch_[--batch_count_];
     }
 
-    // 3. Try global queue - also check if there are tasks in batch
-    // to avoid losing tasks that were just yielded
-    if (batch_count_ > 0) {
-        return local_batch_[--batch_count_];
-    }
+    // 3. Try global queue
     task = Scheduler::Instance().global_queue().Pop();
     if (task) return task;
 
@@ -170,7 +168,7 @@ TaskMetaBase* Worker::PickTask() {
 void Worker::SuspendCurrent() {
     // For bthread, swap back to worker context
     if (current_task_->type == TaskType::BTHREAD) {
-        platform::SwapContext(&static_cast<TaskMeta*>(current_task_)->context, &saved_context_, nullptr);
+        platform::SwapContext(&static_cast<TaskMeta*>(current_task_)->context, &saved_context_);
     }
     // For coroutine, the handle naturally returns to the caller
 }

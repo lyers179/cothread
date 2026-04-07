@@ -73,6 +73,7 @@ struct TaskMeta : TaskMetaBase {
 
     // ========== Lock-Free Wait Queue ==========
     std::atomic<bool> is_waiting{false};  // Prevents ABA, replaces in_queue
+    std::atomic<int> wake_count{0};       // Number of Wake operations seen
     WaiterNode waiter_node;               // Inline node, no dynamic alloc
 
     // ========== XMM Lazy Saving ==========
