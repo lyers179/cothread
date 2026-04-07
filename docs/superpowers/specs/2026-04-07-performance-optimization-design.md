@@ -1,4 +1,4 @@
-# bthread 性能优化设计 v3
+# bthread 性能优化设计 v4
 
 **日期**: 2026-04-07
 **目标**: 提升任务调度效率、同步原语性能和多核扩展性
@@ -160,6 +160,15 @@ void Butex::AddToTail(TaskMeta* task) {
 
     // Exchange tail - acq_rel provides full barrier
     WaiterNode* prev = tail_.exchange(node, std::memory_order_acq_rel);
+
+    // CRITICAL: Check again after exchange - Wake could have cleared is_waiting
+    if (!task->is_waiting.load(std::memory_order_relaxed)) {
+        // Wake cleared is_waiting during the exchange, mark node as claimed
+        // so future PopFromHead will skip it
+        node->claimed.store(true, std::memory_order_release);
+        return;
+    }
+
     if (prev) {
         // Link previous node to new node
         prev->next.store(node, std::memory_order_release);
@@ -191,7 +200,7 @@ void Butex::AddToHead(TaskMeta* task) {
     while (true) {
         WaiterNode* old_head = head_.load(std::memory_order_acquire);
 
-        // Double-check is_waiting in the loop (Wake could have cleared it)
+        // Check is_waiting before CAS - Wake could have cleared it
         if (!task->is_waiting.load(std::memory_order_relaxed)) {
             return;
         }
@@ -200,6 +209,21 @@ void Butex::AddToHead(TaskMeta* task) {
 
         if (head_.compare_exchange_strong(old_head, node,
                 std::memory_order_release, std::memory_order_relaxed)) {
+            // CAS succeeded - check is_waiting one more time
+            if (!task->is_waiting.load(std::memory_order_relaxed)) {
+                // Wake cleared is_waiting during CAS, need to roll back
+                // Set node as claimed so it will be skipped
+                node->claimed.store(true, std::memory_order_release);
+
+                // Roll back head to old_head (best effort)
+                // Note: Another thread might have advanced head already
+                WaiterNode* expected = node;
+                head_.compare_exchange_strong(expected, old_head,
+                    std::memory_order_release, std::memory_order_relaxed);
+
+                return;
+            }
+
             // Successfully inserted at head
             // If this was the first node, also update tail
             if (!old_head) {
