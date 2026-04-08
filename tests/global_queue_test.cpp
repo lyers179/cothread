@@ -23,18 +23,18 @@ int main() {
     q.Push(&t2);
     q.Push(&t3);
 
-    // Test Pop (LIFO order - pops from head)
+    // Test Pop (FIFO order - pops from tail)
     TaskMetaBase* head = q.Pop();
     assert(head != nullptr);
-    // LIFO: t3 was pushed last, so it's popped first
-    assert(head == &t3);
+    // FIFO: t1 was pushed first, so it's popped first
+    assert(head == &t1);
     assert(head->next == nullptr);  // Pop returns single task
 
     // Pop remaining tasks
     head = q.Pop();
     assert(head == &t2);
     head = q.Pop();
-    assert(head == &t1);
+    assert(head == &t3);
 
     printf("  Testing empty after all pops...\n");
     assert(q.Empty());

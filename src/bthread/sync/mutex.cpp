@@ -134,12 +134,24 @@ void Mutex::lock_pthread() {
 }
 
 bool Mutex::try_lock() {
-    uint32_t expected = 0;
-    if (state_.compare_exchange_strong(expected, LOCKED,
-            std::memory_order_acquire, std::memory_order_relaxed)) {
-        return true;
+    Worker* w = Worker::Current();
+
+    if (w) {
+        // Called from bthread - use atomic state
+        uint32_t expected = 0;
+        if (state_.compare_exchange_strong(expected, LOCKED,
+                std::memory_order_acquire, std::memory_order_relaxed)) {
+            return true;
+        }
+        return false;
+    } else {
+        // Called from pthread - use native mutex
+#ifdef _WIN32
+        return TryAcquireSRWLockExclusive(static_cast<SRWLOCK*>(native_mutex_));
+#else
+        return pthread_mutex_trylock(static_cast<pthread_mutex_t*>(native_mutex_)) == 0;
+#endif
     }
-    return false;
 }
 
 void Mutex::unlock() {

@@ -7,12 +7,13 @@
 #include <time.h>
 #include <signal.h>
 #include <cstring>
+#include <cstdio>
+#include <cstdlib>
 
 namespace bthread {
 namespace platform {
 
-// Linux system calls
-static constexpr int SYS_futex = 202;
+// SYS_futex is defined in <sys/syscall.h> on Linux, no need to redefine
 
 // Stack overflow handling
 static void* g_stack_bottom = nullptr;
@@ -30,7 +31,7 @@ static void StackOverflowHandler(int sig, siginfo_t* info, void* ctx) {
         if (addr >= stack_bottom && addr < stack_bottom + PAGE_SIZE) {
             // Stack overflow detected
             fprintf(stderr, "Fatal: Stack overflow detected at %p\n", info->si_addr);
-            _Exit(1);
+            _exit(1);
         }
     }
 
@@ -127,7 +128,7 @@ int FutexWake(std::atomic<int>* addr, int count) {
 
 // Time utilities
 int64_t GetTimeOfDayUs() {
-    struct timespec ts;
+    timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return static_cast<int64_t>(ts.tv_sec) * 1000000 + ts.tv_nsec / 1000;
 }

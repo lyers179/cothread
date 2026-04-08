@@ -150,10 +150,18 @@ inline constexpr int ETIMEDOUT_VAL = ETIMEDOUT;
 
 // ============ Futex Operations ============
 
+// timespec struct - only defined on Windows where it doesn't exist in system headers
+#ifdef _WIN32
 struct timespec {
     int64_t tv_sec;
     int64_t tv_nsec;
 };
+#else
+// On Linux/Unix, use the system's timespec from <time.h>
+#include <time.h>
+// Type alias for consistency with Windows code
+using timespec = ::timespec;
+#endif
 
 // Wait on address (Linux: futex, Windows: WaitOnAddress)
 int FutexWait(std::atomic<int>* addr, int expected, const timespec* timeout);
