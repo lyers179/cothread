@@ -126,11 +126,15 @@ void Mutex::lock_bthread() {
 }
 
 void Mutex::lock_pthread() {
+    // Acquire both native mutex and state_ for consistency
+    // This prevents bthread from acquiring while pthread holds the lock
 #ifdef _WIN32
     AcquireSRWLockExclusive(static_cast<SRWLOCK*>(native_mutex_));
 #else
     pthread_mutex_lock(static_cast<pthread_mutex_t*>(native_mutex_));
 #endif
+    // Mark state as LOCKED so bthreads will wait
+    state_.fetch_or(LOCKED, std::memory_order_release);
 }
 
 bool Mutex::try_lock() {
@@ -190,6 +194,17 @@ void Mutex::unlock() {
 }
 
 void Mutex::unlock_pthread() {
+    // Clear LOCKED state and wake any bthread waiters
+    uint32_t old_state = state_.fetch_and(~LOCKED, std::memory_order_release);
+
+    if (old_state & HAS_WAITERS) {
+        Butex* butex = static_cast<Butex*>(butex_.load(std::memory_order_acquire));
+        if (butex) {
+            butex->set_value(butex->value() + 1);
+            butex->Wake(1);
+        }
+    }
+
 #ifdef _WIN32
     ReleaseSRWLockExclusive(static_cast<SRWLOCK*>(native_mutex_));
 #else
