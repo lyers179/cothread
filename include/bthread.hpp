@@ -27,23 +27,26 @@
 
 #pragma once
 
-// Core components
+// Core
 #include "bthread/core/task_meta_base.hpp"
 #include "bthread/core/task.hpp"
 #include "bthread/core/scheduler.hpp"
 
-// Modern API
-#include "bthread/api.hpp"
+// Queue
+#include "bthread/queue/mpsc_queue.hpp"
 
-// Synchronization primitives
+// Sync
 #include "bthread/sync/mutex.hpp"
 #include "bthread/sync/cond.hpp"
 #include "bthread/sync/event.hpp"
 
-// Coroutine support (optional, requires C++20 coroutines)
+// API
+#include "bthread/api/spawn.hpp"
+#include "bthread/api/config.hpp"
+
+// Coroutine support
 #include "coro/coroutine.h"
 #include "coro/meta.h"
-#include "coro/result.h"
 
 namespace bthread {
 
