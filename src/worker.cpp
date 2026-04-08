@@ -77,10 +77,9 @@ void Worker::Run() {
         HandleTaskAfterRun(completed_task);
     }
 
-    // Before exiting, ensure any pending task is handled
-    if (current_task_) {
-        HandleTaskAfterRun(current_task_);
-    }
+    // Worker is exiting
+    // Ensure no current task
+    current_task_ = nullptr;
 }
 
 void Worker::RunBthread(TaskMeta* task) {
@@ -185,9 +184,9 @@ void Worker::WaitForTask() {
 
     platform::timespec ts;
     ts.tv_sec = 0;
-    ts.tv_nsec = 10000000;  // 10ms timeout
+    ts.tv_nsec = 1000000;  // 1ms timeout for faster response
 
-    while (stop_flag_.load(std::memory_order_acquire) == 0) {
+    while (stop_flag_.load(std::memory_order_seq_cst) == 0) {
         // Check for tasks first
         if (!local_queue_.Empty() ||
             !Scheduler::Instance().global_queue().Empty()) {
@@ -213,10 +212,10 @@ void Worker::WakeUp() {
 }
 
 void Worker::Stop() {
-    stop_flag_.store(1, std::memory_order_release);
-    wake_count_.fetch_add(1, std::memory_order_release);
-    // Use WakeByAddressAll to wake all waiting workers
-    platform::FutexWake(&wake_count_, 2);
+    stop_flag_.store(1, std::memory_order_seq_cst);
+    wake_count_.fetch_add(1, std::memory_order_seq_cst);
+    // Wake ALL waiting threads on this wake_count_
+    platform::FutexWake(&wake_count_, INT_MAX);
 }
 
 void Worker::HandleTaskAfterRun(TaskMetaBase* task) {

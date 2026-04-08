@@ -61,7 +61,7 @@ public:
 
     // Check if worker is stopped
     bool IsStopped() const {
-        return stop_flag_.load(std::memory_order_acquire) != 0;
+        return stop_flag_.load(std::memory_order_seq_cst) != 0;
     }
 
     // Yield current task

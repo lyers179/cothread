@@ -49,9 +49,17 @@ void SetupStackOverflowHandler() {
     sigaction(SIGSEGV, &sa, nullptr);
 }
 
-// Stack allocation
+// Stack allocation with metadata header
+struct StackHeader {
+    void* base_ptr;       // Original mmap pointer for deallocation
+    size_t total_size;    // Total allocation size for munmap
+    size_t requested_size; // Original requested stack size (for verification)
+};
+
 void* AllocateStack(size_t size) {
-    size_t total = size + PAGE_SIZE;
+    // Allocate: header page + guard page + stack + alignment padding
+    // Add 16 bytes to ensure alignment doesn't reduce usable space
+    size_t total = PAGE_SIZE + PAGE_SIZE + size + 16;
 
     void* ptr = mmap(nullptr, total, PROT_READ | PROT_WRITE,
                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -59,10 +67,17 @@ void* AllocateStack(size_t size) {
         return nullptr;
     }
 
-    // Guard page at lowest address
-    mprotect(ptr, PAGE_SIZE, PROT_NONE);
+    // Store header at the beginning (first page)
+    StackHeader* header = static_cast<StackHeader*>(ptr);
+    header->base_ptr = ptr;
+    header->total_size = total;
+    header->requested_size = size;
+
+    // Guard page at second page (after header)
+    mprotect(static_cast<char*>(ptr) + PAGE_SIZE, PAGE_SIZE, PROT_NONE);
 
     // Stack top is at highest address, 16-byte aligned
+    // With extra 16 bytes, alignment won't reduce usable stack below 'size'
     void* stack_top = static_cast<char*>(ptr) + total;
     stack_top = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(stack_top) & ~0xF);
 
@@ -72,9 +87,32 @@ void* AllocateStack(size_t size) {
 void DeallocateStack(void* stack_top, size_t size) {
     if (!stack_top) return;
 
-    size_t total = size + PAGE_SIZE;
-    void* ptr = static_cast<char*>(stack_top) - total;
-    munmap(ptr, total);
+    // Find the header page by going backwards from stack_top
+    // Layout: [header PAGE][guard PAGE][stack size+16 bytes][stack_top aligned]
+    // stack_top is at (ptr + total) aligned down, where total = 2*PAGE_SIZE + size + 16
+    // ptr is always page-aligned (mmap guarantee)
+    // Alignment offset is < 16 < PAGE_SIZE, so:
+    // (stack_top - size) rounded down to page gives us ptr + PAGE_SIZE (guard page start)
+    // Then go back one more page to get header at ptr
+
+    uintptr_t stack_addr = reinterpret_cast<uintptr_t>(stack_top);
+    // First, find the guard page boundary
+    uintptr_t guard_page_start = (stack_addr - size - PAGE_SIZE) & ~(PAGE_SIZE - 1);
+    // Header is one page before guard
+    uintptr_t header_page_start = guard_page_start - PAGE_SIZE;
+
+    StackHeader* header = reinterpret_cast<StackHeader*>(header_page_start);
+
+    // Sanity check: verify header is valid
+    if (header->requested_size == size &&
+        header->base_ptr == reinterpret_cast<void*>(header_page_start)) {
+        munmap(header->base_ptr, header->total_size);
+    } else {
+        // Fallback: use size to calculate (in case header was corrupted)
+        // This shouldn't happen but provides safety
+        size_t total = PAGE_SIZE + PAGE_SIZE + size + 16;
+        munmap(reinterpret_cast<void*>(header_page_start), total);
+    }
 }
 
 // Thread management

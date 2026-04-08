@@ -54,15 +54,22 @@ void Scheduler::Shutdown() {
 
     running_.store(false, std::memory_order_release);
 
+    // Get worker count before clearing
+    int num_workers = worker_count_.load(std::memory_order_acquire);
+
     // Stop all workers multiple times with delays
     // This ensures the stop flag is set and workers are woken
-    for (int attempt = 0; attempt < 5; ++attempt) {
+    for (int attempt = 0; attempt < 10; ++attempt) {
         std::lock_guard<std::mutex> lock(workers_mutex_);
         for (auto* w : workers_) {
             w->Stop();
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        // Shorter sleep, more attempts
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
+
+    // Give workers a bit more time to exit their loops
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     // Join all workers
     std::vector<Worker*> workers_copy;
