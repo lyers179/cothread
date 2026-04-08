@@ -19,12 +19,12 @@ void Butex::AddToTail(TaskMeta* task) {
         return;
     }
 
-    WaiterNode* node = &task->waiter_node;
+    ButexWaiterNode* node = &task->butex_waiter_node;
     node->next.store(nullptr, std::memory_order_relaxed);
     node->claimed.store(false, std::memory_order_relaxed);
 
     // Exchange tail - acq_rel provides full barrier
-    WaiterNode* prev = tail_.exchange(node, std::memory_order_acq_rel);
+    ButexWaiterNode* prev = tail_.exchange(node, std::memory_order_acq_rel);
 
     // Check again after exchange - Wake could have cleared is_waiting
     // Use acquire to synchronize with Wake's release store
@@ -40,7 +40,7 @@ void Butex::AddToTail(TaskMeta* task) {
     } else {
         // First node - set head. Note: there's a window where tail is set but head isn't
         // PopFromHead handles this by checking tail != head
-        WaiterNode* expected = nullptr;
+        ButexWaiterNode* expected = nullptr;
         head_.compare_exchange_strong(expected, node,
             std::memory_order_release, std::memory_order_relaxed);
     }
@@ -51,12 +51,12 @@ void Butex::AddToHead(TaskMeta* task) {
         return;
     }
 
-    WaiterNode* node = &task->waiter_node;
+    ButexWaiterNode* node = &task->butex_waiter_node;
     // Don't set claimed=true - Wait() already initializes it to false
 
     // Use CAS loop for head insertion
     while (true) {
-        WaiterNode* old_head = head_.load(std::memory_order_acquire);
+        ButexWaiterNode* old_head = head_.load(std::memory_order_acquire);
 
         // Check is_waiting before CAS - Wake could have cleared it
         if (!task->is_waiting.load(std::memory_order_relaxed)) {
@@ -88,7 +88,7 @@ void Butex::AddToHead(TaskMeta* task) {
 
                 // Roll back head to old_head (best effort)
                 // Note: Another thread might have advanced head already
-                WaiterNode* expected = node;
+                ButexWaiterNode* expected = node;
                 head_.compare_exchange_strong(expected, old_head,
                     std::memory_order_release, std::memory_order_relaxed);
 
@@ -98,7 +98,7 @@ void Butex::AddToHead(TaskMeta* task) {
             // Successfully inserted at head
             // If this was the first node, also update tail
             if (!old_head) {
-                WaiterNode* expected = nullptr;
+                ButexWaiterNode* expected = nullptr;
                 tail_.compare_exchange_strong(expected, node,
                     std::memory_order_release, std::memory_order_relaxed);
             }
@@ -112,10 +112,10 @@ TaskMeta* Butex::PopFromHead() {
     int spin_count = 0;
     while (true) {
         // Load head with acquire
-        WaiterNode* head = head_.load(std::memory_order_acquire);
+        ButexWaiterNode* head = head_.load(std::memory_order_acquire);
         if (!head) {
             // Check if tail is non-null - there might be a node being added
-            WaiterNode* tail = tail_.load(std::memory_order_acquire);
+            ButexWaiterNode* tail = tail_.load(std::memory_order_acquire);
             if (tail && tail != head) {
                 // Node being added, spin briefly
                 if (spin_count++ < 1000) {
@@ -129,10 +129,10 @@ TaskMeta* Butex::PopFromHead() {
         // Try to claim this node
         if (head->claimed.exchange(true, std::memory_order_acq_rel)) {
             // Already claimed, try to skip to next
-            WaiterNode* next = head->next.load(std::memory_order_acquire);
+            ButexWaiterNode* next = head->next.load(std::memory_order_acquire);
             if (next) {
                 // Try to advance head past this claimed node
-                WaiterNode* expected = head;
+                ButexWaiterNode* expected = head;
                 head_.compare_exchange_weak(expected, next,
                     std::memory_order_acq_rel, std::memory_order_relaxed);
             }
@@ -140,11 +140,11 @@ TaskMeta* Butex::PopFromHead() {
         }
 
         // Load next with acquire to synchronize with AddToTail's release store
-        WaiterNode* next = head->next.load(std::memory_order_acquire);
+        ButexWaiterNode* next = head->next.load(std::memory_order_acquire);
 
         // If next is null but tail != head, a node is being added
         if (!next) {
-            WaiterNode* tail = tail_.load(std::memory_order_acquire);
+            ButexWaiterNode* tail = tail_.load(std::memory_order_acquire);
             if (tail != head) {
                 // Node being added, spin and retry
                 head->claimed.store(false, std::memory_order_relaxed);
@@ -156,12 +156,12 @@ TaskMeta* Butex::PopFromHead() {
         }
 
         // Try to advance head - acq_rel provides synchronization for accessing head->task
-        WaiterNode* expected = head;
+        ButexWaiterNode* expected = head;
         if (head_.compare_exchange_strong(expected, next,
                 std::memory_order_acq_rel, std::memory_order_relaxed)) {
             // Successfully claimed and advanced
             return reinterpret_cast<TaskMeta*>(
-                reinterpret_cast<char*>(head) - offsetof(TaskMeta, waiter_node));
+                reinterpret_cast<char*>(head) - offsetof(TaskMeta, butex_waiter_node));
         }
 
         // CAS failed, reset claimed and retry
@@ -178,7 +178,7 @@ void Butex::RemoveFromWaitQueue(TaskMeta* task) {
     }
 
     // Mark node as claimed so PopFromHead will skip it
-    task->waiter_node.claimed.store(true, std::memory_order_release);
+    task->butex_waiter_node.claimed.store(true, std::memory_order_release);
 
     // Note: We don't actually remove from linked structure
     // PopFromHead will handle it when it reaches this node
@@ -246,7 +246,7 @@ int Butex::Wait(int expected_value, const platform::timespec* timeout, bool prep
     }
 
     // 3. Prepare waiter node
-    WaiterNode* node = &task->waiter_node;
+    ButexWaiterNode* node = &task->butex_waiter_node;
     node->next.store(nullptr, std::memory_order_relaxed);
     node->claimed.store(false, std::memory_order_relaxed);
 

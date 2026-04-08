@@ -221,7 +221,7 @@ void Mutex::unlock_pthread() {
 
 void Mutex::enqueue_waiter(TaskMetaBase* task) {
     std::lock_guard<std::mutex> lock(waiters_mutex_);
-    WaiterNode* node = new WaiterNode{task, nullptr};
+    MutexWaiterNode* node = new MutexWaiterNode{task, nullptr};
     if (waiter_tail_) {
         waiter_tail_->next = node;
         waiter_tail_ = node;
@@ -234,7 +234,7 @@ TaskMetaBase* Mutex::dequeue_waiter() {
     std::lock_guard<std::mutex> lock(waiters_mutex_);
     if (!waiter_head_) return nullptr;
 
-    WaiterNode* node = waiter_head_;
+    MutexWaiterNode* node = waiter_head_;
     waiter_head_ = node->next;
     if (!waiter_head_) waiter_tail_ = nullptr;
 

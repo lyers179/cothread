@@ -114,12 +114,12 @@ private:
 
     // Waiters queue for coroutine waiters
     std::mutex waiters_mutex_;
-    struct WaiterNode {
+    struct MutexWaiterNode {
         TaskMetaBase* task;
-        WaiterNode* next;
+        MutexWaiterNode* next;
     };
-    WaiterNode* waiter_head_{nullptr};
-    WaiterNode* waiter_tail_{nullptr};
+    MutexWaiterNode* waiter_head_{nullptr};
+    MutexWaiterNode* waiter_tail_{nullptr};
 
     // Native mutex for pthread context
     void* native_mutex_{nullptr};

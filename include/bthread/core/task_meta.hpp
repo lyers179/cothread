@@ -14,9 +14,9 @@ namespace bthread {
 class Worker;
 struct TaskMeta;  // Forward declare for WaiterState
 
-// WaiterNode - lock-free queue node (inline in TaskMeta)
-struct WaiterNode {
-    std::atomic<WaiterNode*> next{nullptr};
+// ButexWaiterNode - lock-free queue node for Butex (inline in TaskMeta)
+struct ButexWaiterNode {
+    std::atomic<ButexWaiterNode*> next{nullptr};
     std::atomic<bool> claimed{false};  // Prevents double consumption
 };
 
@@ -74,7 +74,7 @@ struct TaskMeta : TaskMetaBase {
     // ========== Lock-Free Wait Queue ==========
     std::atomic<bool> is_waiting{false};  // Prevents ABA, replaces in_queue
     std::atomic<int> wake_count{0};       // Number of Wake operations seen
-    WaiterNode waiter_node;               // Inline node, no dynamic alloc
+    ButexWaiterNode butex_waiter_node;    // Inline node, no dynamic alloc
 
     // ========== XMM Lazy Saving ==========
     bool uses_xmm{false};  // True if task uses SIMD (xmm6-xmm15)
