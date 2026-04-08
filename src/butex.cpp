@@ -5,6 +5,7 @@
 #include "bthread/platform/platform.h"
 
 #include <cstring>
+#include <thread>
 
 using namespace bthread;
 using namespace bthread::platform;
@@ -28,13 +29,17 @@ void Butex::AddToTail(TaskMeta* task) {
     // Check again after exchange - Wake could have cleared is_waiting
     // Use acquire to synchronize with Wake's release store
     if (!task->is_waiting.load(std::memory_order_acquire)) {
+        // Mark as claimed so PopFromHead will skip us
         node->claimed.store(true, std::memory_order_release);
         return;
     }
 
     if (prev) {
+        // Link previous node to new node - this makes node visible to PopFromHead
         prev->next.store(node, std::memory_order_release);
     } else {
+        // First node - set head. Note: there's a window where tail is set but head isn't
+        // PopFromHead handles this by checking tail != head
         WaiterNode* expected = nullptr;
         head_.compare_exchange_strong(expected, node,
             std::memory_order_release, std::memory_order_relaxed);
@@ -104,20 +109,51 @@ void Butex::AddToHead(TaskMeta* task) {
 }
 
 TaskMeta* Butex::PopFromHead() {
+    int spin_count = 0;
     while (true) {
         // Load head with acquire
         WaiterNode* head = head_.load(std::memory_order_acquire);
-        if (!head) return nullptr;
+        if (!head) {
+            // Check if tail is non-null - there might be a node being added
+            WaiterNode* tail = tail_.load(std::memory_order_acquire);
+            if (tail && tail != head) {
+                // Node being added, spin briefly
+                if (spin_count++ < 1000) {
+                    std::this_thread::yield();
+                    continue;
+                }
+            }
+            return nullptr;
+        }
 
         // Try to claim this node
         if (head->claimed.exchange(true, std::memory_order_acq_rel)) {
-            // Already claimed, skip
-            head = head->next.load(std::memory_order_acquire);
+            // Already claimed, try to skip to next
+            WaiterNode* next = head->next.load(std::memory_order_acquire);
+            if (next) {
+                // Try to advance head past this claimed node
+                WaiterNode* expected = head;
+                head_.compare_exchange_weak(expected, next,
+                    std::memory_order_acq_rel, std::memory_order_relaxed);
+            }
             continue;
         }
 
-        // Load next with relaxed - the CAS below provides the barrier
-        WaiterNode* next = head->next.load(std::memory_order_relaxed);
+        // Load next with acquire to synchronize with AddToTail's release store
+        WaiterNode* next = head->next.load(std::memory_order_acquire);
+
+        // If next is null but tail != head, a node is being added
+        if (!next) {
+            WaiterNode* tail = tail_.load(std::memory_order_acquire);
+            if (tail != head) {
+                // Node being added, spin and retry
+                head->claimed.store(false, std::memory_order_relaxed);
+                if (spin_count++ < 1000) {
+                    std::this_thread::yield();
+                }
+                continue;
+            }
+        }
 
         // Try to advance head - acq_rel provides synchronization for accessing head->task
         WaiterNode* expected = head;
