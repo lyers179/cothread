@@ -170,7 +170,7 @@ void test_coroutine_queue_basic() {
     queue.Push(&meta1);
     assert(!queue.Empty());
 
-    coro::CoroutineMeta* popped = queue.Pop();
+    coro::CoroutineMeta* popped = static_cast<coro::CoroutineMeta*>(queue.Pop());
     assert(popped == &meta1);
     assert(queue.Empty());
 
@@ -244,7 +244,7 @@ void test_coroutine_queue_multithreaded() {
     // Consumer pops all items (single consumer thread)
     int count = 0;
     while (!queue.Empty()) {
-        coro::CoroutineMeta* meta = queue.Pop();
+        coro::CoroutineMeta* meta = static_cast<coro::CoroutineMeta*>(queue.Pop());
         assert(meta != nullptr);
         ++count;
     }

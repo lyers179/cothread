@@ -40,7 +40,7 @@ public:
     bool running() const;
 
     /// Get global queue (deprecated - use bthread::Scheduler::global_queue())
-    CoroutineQueue& global_queue();
+    bthread::TaskQueue& global_queue();
 
     /**
      * @brief Spawn a task for execution by the unified scheduler.

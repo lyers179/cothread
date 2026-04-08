@@ -47,7 +47,6 @@ set(BTHREAD_SOURCES
     src/bthread/core/scheduler.cpp
     src/bthread/core/task.cpp
     src/bthread/core/coro_support.cpp
-    src/bthread/queue/global_queue.cpp
     src/bthread/queue/work_stealing_queue.cpp
     src/bthread/queue/execution_queue.cpp
     src/bthread/sync/butex.cpp
@@ -71,6 +70,7 @@ set(BTHREAD_HEADERS
     include/bthread/core/scheduler.hpp
     include/bthread/core/task.hpp
     include/bthread/api.hpp
+    include/bthread/queue/mpsc_queue.hpp
     include/bthread/queue/global_queue.hpp
     include/bthread/queue/work_stealing_queue.hpp
     include/bthread/queue/execution_queue.hpp

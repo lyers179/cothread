@@ -129,9 +129,9 @@ bool CoroutineScheduler::running() const {
     return bthread::Scheduler::Instance().running();
 }
 
-CoroutineQueue& CoroutineScheduler::global_queue() {
+bthread::TaskQueue& CoroutineScheduler::global_queue() {
     // This is deprecated - kept for backward compatibility
-    static CoroutineQueue fallback_queue;
+    static bthread::TaskQueue fallback_queue;
     return fallback_queue;
 }
 
