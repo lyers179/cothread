@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <mutex>
 
-#include "bthread/core/task_meta.hpp"
+#include "bthread/sync/butex_queue.hpp"
 #include "bthread/platform/platform.h"
 
 namespace bthread {
@@ -12,9 +12,6 @@ namespace bthread {
 // Forward declarations
 class Worker;
 struct TaskMeta;
-
-// ButexWaiterNode forward declaration
-struct ButexWaiterNode;
 
 // Butex - binary mutex for bthread synchronization
 // Supports FIFO (append) and LIFO (prepend) wait queue ordering
@@ -39,23 +36,12 @@ public:
     int value() const { return value_.load(std::memory_order_acquire); }
     void set_value(int v) { value_.store(v, std::memory_order_release); }
 
+    // Expose queue for timeout callback (internal use)
+    ButexQueue& queue() { return queue_; }
+
 private:
-    // Lock-free MPSC queue
-    std::atomic<ButexWaiterNode*> head_{nullptr};
-    std::atomic<ButexWaiterNode*> tail_{nullptr};
-    std::atomic<int> value_{0};
-
-    // Add waiter to head (LIFO) - used for re-queueing woken threads
-    void AddToHead(TaskMeta* waiter);
-
-    // Add waiter to tail (FIFO) - used for first-time waiters
-    void AddToTail(TaskMeta* waiter);
-
-    // Remove waiter from queue
-    void RemoveFromWaitQueue(TaskMeta* waiter);
-
-    // Pop waiter from head
-    TaskMeta* PopFromHead();
+    ButexQueue queue_;           // Lock-free MPSC queue for waiters
+    std::atomic<int> value_{0};  // Current value
 
     // Timeout callback
     static void TimeoutCallback(void* arg);
