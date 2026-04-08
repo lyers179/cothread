@@ -107,9 +107,8 @@ void Mutex::lock_bthread() {
 
         // Wait on butex
         Butex* butex = static_cast<Butex*>(butex_.load(std::memory_order_acquire));
-        int generation = butex->value();
 
-        // Double-check lock state
+        // Double-check lock state before getting generation
         expected = state_.load(std::memory_order_acquire);
         if ((expected & LOCKED) == 0) {
             uint32_t new_val = LOCKED | (expected & HAS_WAITERS);
@@ -117,7 +116,11 @@ void Mutex::lock_bthread() {
                     std::memory_order_acquire, std::memory_order_relaxed)) {
                 return;
             }
+            // CAS failed, re-read state for the loop
+            continue;
         }
+
+        int generation = butex->value();
 
         // Wait (first wait: FIFO, subsequent: LIFO)
         butex->Wait(generation, nullptr, !first_wait);
