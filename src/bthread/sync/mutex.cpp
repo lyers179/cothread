@@ -1,8 +1,8 @@
 // src/bthread/sync/mutex.cpp
 #include "bthread/sync/mutex.hpp"
-#include "bthread/scheduler.h"
-#include "bthread/worker.h"
-#include "bthread/butex.h"
+#include "bthread/core/scheduler.hpp"
+#include "bthread/core/worker.hpp"
+#include "bthread/sync/butex.hpp"
 #include "bthread/platform/platform.h"
 #include "coro/meta.h"
 
@@ -123,7 +123,11 @@ void Mutex::lock_bthread() {
         int generation = butex->value();
 
         // Wait (first wait: FIFO, subsequent: LIFO)
-        butex->Wait(generation, nullptr, !first_wait);
+        int result = butex->Wait(generation, nullptr, !first_wait);
+        if (result == ECANCELED) {
+            // Scheduler is shutting down - break out of loop
+            return;
+        }
         first_wait = false;
     }
 }

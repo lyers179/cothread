@@ -1,6 +1,6 @@
-#include "bthread/timer_thread.h"
+#include "bthread/detail/timer_thread.hpp"
 #include "bthread/platform/platform.h"
-#include "bthread/scheduler.h"
+#include "bthread/core/scheduler.hpp"
 
 #include <algorithm>
 #include <climits>

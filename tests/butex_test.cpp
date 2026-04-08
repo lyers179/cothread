@@ -1,5 +1,5 @@
 #include "bthread.h"
-#include "bthread/butex.h"
+#include "bthread/sync/butex.hpp"
 
 #include <cstdio>
 #include <cassert>

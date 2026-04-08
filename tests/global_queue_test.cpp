@@ -1,6 +1,6 @@
 #include "bthread.h"
-#include "bthread/global_queue.h"
-#include "bthread/task_meta.h"
+#include "bthread/queue/global_queue.hpp"
+#include "bthread/core/task_meta.hpp"
 
 #include <cstdio>
 #include <cassert>

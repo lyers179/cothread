@@ -36,7 +36,6 @@ int main() {
 
     assert(batch_counter.load() == N);
     printf("  PASSED: All %d batched tasks completed\n", N);
-    bthread_shutdown();
 
     // Test 2: Stealing During Batch
     printf("\nTest 2: Stealing During Batch\n");
@@ -56,6 +55,8 @@ int main() {
 
     assert(batch_counter.load() == N2);
     printf("  PASSED: All %d batched tasks with work stealing completed\n", N2);
+
+    // Shutdown at the end
     bthread_shutdown();
 
     printf("\nAll Worker Batch tests passed!\n");

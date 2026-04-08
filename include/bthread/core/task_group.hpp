@@ -3,8 +3,9 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <vector>
 
-#include "bthread/task_meta.h"
+#include "bthread/core/task_meta.hpp"
 
 namespace bthread {
 
@@ -47,6 +48,10 @@ public:
     void set_worker_count(int32_t count) {
         worker_count_.store(count, std::memory_order_release);
     }
+
+    // Get all suspended tasks for shutdown wake-up
+    // Returns a vector of TaskMeta pointers that are in SUSPENDED state
+    std::vector<TaskMeta*> GetSuspendedTasks() const;
 
 private:
     // TaskMeta pool for reuse

@@ -1,5 +1,5 @@
-// src/work_stealing_queue.cpp
-#include "bthread/work_stealing_queue.h"
+// src/bthread/queue/work_stealing_queue.cpp
+#include "bthread/queue/work_stealing_queue.hpp"
 
 namespace bthread {
 

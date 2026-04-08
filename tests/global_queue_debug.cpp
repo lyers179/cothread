@@ -1,5 +1,5 @@
 #include "bthread.h"
-#include "bthread/global_queue.h"
+#include "bthread/queue/global_queue.hpp"
 #include <cstdio>
 
 using namespace bthread;

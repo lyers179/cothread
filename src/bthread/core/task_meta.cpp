@@ -1,6 +1,6 @@
-// src/task_meta.cpp
-#include "bthread/task_meta.h"
-#include "bthread/worker.h"
+// src/bthread/core/task_meta.cpp
+#include "bthread/core/task_meta.hpp"
+#include "bthread/core/worker.hpp"
 #include "bthread/platform/platform.h"
 #include "bthread.h"
 

@@ -1,7 +1,7 @@
-#include "bthread/butex.h"
-#include "bthread/worker.h"
-#include "bthread/scheduler.h"
-#include "bthread/timer_thread.h"
+#include "bthread/sync/butex.hpp"
+#include "bthread/core/worker.hpp"
+#include "bthread/core/scheduler.hpp"
+#include "bthread/detail/timer_thread.hpp"
 #include "bthread/platform/platform.h"
 
 #include <cstring>
@@ -227,6 +227,11 @@ int Butex::Wait(int expected_value, const platform::timespec* timeout, bool prep
 
     TaskMeta* task = static_cast<TaskMeta*>(base_task);
 
+    // Check if scheduler is shutting down - return error immediately
+    if (!Scheduler::Instance().running()) {
+        return ECANCELED;  // Operation cancelled due to shutdown
+    }
+
     // 1. Check value first
     if (value_.load(std::memory_order_acquire) != expected_value) {
         return 0;
@@ -304,6 +309,11 @@ int Butex::Wait(int expected_value, const platform::timespec* timeout, bool prep
 
     // 10. Resumed
     task->waiting_butex = nullptr;
+
+    // Check if we were woken due to shutdown
+    if (!Scheduler::Instance().running()) {
+        return ECANCELED;
+    }
 
     if (task->waiter.timed_out.load(std::memory_order_acquire)) {
         return ETIMEDOUT;

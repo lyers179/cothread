@@ -1,7 +1,7 @@
 #include "bthread.h"
-#include "bthread/scheduler.h"
-#include "bthread/worker.h"
-#include "bthread/global_queue.h"
+#include "bthread/core/scheduler.hpp"
+#include "bthread/core/worker.hpp"
+#include "bthread/queue/global_queue.hpp"
 
 #include <cstdio>
 #include <thread>

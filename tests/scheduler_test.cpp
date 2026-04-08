@@ -1,7 +1,7 @@
 #include "bthread.h"
-#include "bthread/scheduler.h"
-#include "bthread/task_meta.h"
-#include "bthread/task_group.h"
+#include "bthread/core/scheduler.hpp"
+#include "bthread/core/task_meta.hpp"
+#include "bthread/core/task_group.hpp"
 #include "bthread/platform/platform.h"
 
 #include <cstdio>

@@ -41,22 +41,22 @@ endif()
 # Library sources
 set(BTHREAD_SOURCES
     src/bthread.cpp
-    src/task_meta.cpp
-    src/task_group.cpp
-    src/work_stealing_queue.cpp
-    src/global_queue.cpp
-    src/worker.cpp
-    src/scheduler.cpp
-    src/butex.cpp
-    src/once.cpp
-    src/timer_thread.cpp
-    src/execution_queue.cpp
-    src/platform/platform.cpp
+    src/bthread/core/task_meta.cpp
+    src/bthread/core/task_group.cpp
+    src/bthread/core/worker.cpp
+    src/bthread/core/scheduler.cpp
+    src/bthread/core/task.cpp
+    src/bthread/core/coro_support.cpp
+    src/bthread/queue/global_queue.cpp
+    src/bthread/queue/work_stealing_queue.cpp
+    src/bthread/queue/execution_queue.cpp
+    src/bthread/sync/butex.cpp
     src/bthread/sync/mutex.cpp
     src/bthread/sync/cond.cpp
     src/bthread/sync/event.cpp
-    src/bthread/core/task.cpp
-    src/bthread/core/coro_support.cpp
+    src/bthread/api/once.cpp
+    src/bthread/detail/timer_thread.cpp
+    src/platform/platform.cpp
     ${PLATFORM_SOURCES}
 )
 
@@ -64,28 +64,27 @@ set(BTHREAD_SOURCES
 set(BTHREAD_HEADERS
     include/bthread.h
     include/bthread.hpp
-    include/bthread/task_meta.h
     include/bthread/core/task_meta_base.hpp
+    include/bthread/core/task_meta.hpp
+    include/bthread/core/task_group.hpp
+    include/bthread/core/worker.hpp
     include/bthread/core/scheduler.hpp
     include/bthread/core/task.hpp
     include/bthread/api.hpp
-    include/bthread/task_group.h
-    include/bthread/work_stealing_queue.h
-    include/bthread/global_queue.h
-    include/bthread/worker.h
-    include/bthread/scheduler.h
-    include/bthread/butex.h
-    include/bthread/once.h
-    include/bthread/timer_thread.h
-    include/bthread/execution_queue.h
+    include/bthread/queue/global_queue.hpp
+    include/bthread/queue/work_stealing_queue.hpp
+    include/bthread/queue/execution_queue.hpp
+    include/bthread/sync/butex.hpp
+    include/bthread/sync/mutex.hpp
+    include/bthread/sync/cond.hpp
+    include/bthread/sync/event.hpp
+    include/bthread/api/once.hpp
+    include/bthread/detail/timer_thread.hpp
     include/bthread/platform/platform.h
     include/bthread/platform/platform.hpp
     include/bthread/platform/futex.hpp
     include/bthread/platform/stack.hpp
     include/bthread/platform/context.hpp
-    include/bthread/sync/mutex.hpp
-    include/bthread/sync/cond.hpp
-    include/bthread/sync/event.hpp
     ${PLATFORM_HEADERS}
 )
 

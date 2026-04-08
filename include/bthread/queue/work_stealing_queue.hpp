@@ -1,4 +1,4 @@
-// include/bthread/work_stealing_queue.h
+// include/bthread/queue/work_stealing_queue.hpp
 #pragma once
 
 #include <atomic>

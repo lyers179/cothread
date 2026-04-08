@@ -1,4 +1,4 @@
-// include/bthread/global_queue.h
+// include/bthread/queue/global_queue.hpp
 #pragma once
 
 #include <atomic>

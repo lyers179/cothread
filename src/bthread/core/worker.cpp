@@ -1,10 +1,10 @@
-// src/worker.cpp
-#include "bthread/worker.h"
-#include "bthread/scheduler.h"
-#include "bthread/task_meta.h"
+// src/bthread/core/worker.cpp
+#include "bthread/core/worker.hpp"
+#include "bthread/core/scheduler.hpp"
+#include "bthread/core/task_meta.hpp"
 #include "bthread/core/task_meta_base.hpp"
-#include "bthread/task_group.h"
-#include "bthread/butex.h"
+#include "bthread/core/task_group.hpp"
+#include "bthread/sync/butex.hpp"
 #include "bthread/platform/platform.h"
 #include "coro/meta.h"
 
@@ -75,6 +75,31 @@ void Worker::Run() {
         }
 
         HandleTaskAfterRun(completed_task);
+    }
+
+    // Drain remaining tasks after stop to ensure cleanup
+    // This is important for tasks that were woken during shutdown
+    for (int drain_count = 0; drain_count < 100; ++drain_count) {
+        TaskMetaBase* task = PickTask();
+        if (task == nullptr) {
+            break;  // No more tasks to process
+        }
+
+        current_task_ = task;
+        task->state.store(TaskState::RUNNING, std::memory_order_release);
+        task->owner_worker = this;
+
+        switch (task->type) {
+            case TaskType::BTHREAD:
+                RunBthread(static_cast<TaskMeta*>(task));
+                break;
+            case TaskType::COROUTINE:
+                RunCoroutine(static_cast<coro::CoroutineMeta*>(task));
+                break;
+        }
+
+        HandleTaskAfterRun(current_task_);
+        current_task_ = nullptr;
     }
 
     // Worker is exiting

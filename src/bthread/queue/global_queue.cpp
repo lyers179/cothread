@@ -1,8 +1,8 @@
-// src/global_queue.cpp
-#include "bthread/global_queue.h"
+// src/bthread/queue/global_queue.cpp
+#include "bthread/queue/global_queue.hpp"
 
 // Note: GlobalQueue implementation is now inline in the header file
-// (include/bthread/global_queue.h) to support TaskMetaBase template-like behavior.
+// (include/bthread/queue/global_queue.hpp) to support TaskMetaBase template-like behavior.
 // This file is kept for future extensions or platform-specific optimizations.
 
 namespace bthread {

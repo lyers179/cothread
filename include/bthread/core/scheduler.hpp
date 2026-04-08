@@ -10,13 +10,15 @@
 #include <functional>
 
 #include "bthread/core/task_meta_base.hpp"
+#include "bthread/core/task_meta.hpp"
+#include "bthread/core/task_group.hpp"
+#include "bthread/core/worker.hpp"
+#include "bthread/queue/global_queue.hpp"
 
 // Forward declarations
 namespace bthread {
-class Worker;
 class TimerThread;
-class GlobalQueue;
-class TaskGroup;
+class Butex;
 }
 
 // Forward declarations for coroutine support
@@ -70,8 +72,12 @@ public:
         return initialized_.load(std::memory_order_acquire);
     }
 
-    /// Get global queue (legacy compatibility)
-    GlobalQueue& global_queue();
+    /// Get global queue
+    GlobalQueue& global_queue() { return global_queue_; }
+    const GlobalQueue& global_queue() const { return global_queue_; }
+
+    /// Get task group
+    TaskGroup& task_group();
 
     /// Get worker count
     int32_t worker_count() const {
@@ -89,6 +95,14 @@ public:
         configured_count_ = count;
     }
 
+    /// Wake butex waiters
+    void WakeButex(void* butex, int count);
+
+    /// Wake idle workers
+    void WakeIdleWorkers(int count);
+
+    // ========== Unified Task Submission ==========
+
     /**
      * @brief Submit a task for execution.
      * Thread-safe: Can be called from any thread.
@@ -98,14 +112,10 @@ public:
     void Submit(TaskMetaBase* task);
 
     /**
-     * @brief Wake waiters on a synchronization primitive.
-     * @param sync Pointer to the sync primitive (Butex, Mutex, etc.)
-     * @param count Number of waiters to wake (-1 for all)
+     * @brief Enqueue a bthread task (legacy compatibility).
+     * Thread-safe: Can be called from any thread.
      */
-    void WakeWaiters(void* sync, int count);
-
-    /// Wake idle workers
-    void WakeIdleWorkers(int count);
+    void EnqueueTask(TaskMeta* task);
 
     // ========== Coroutine Support ==========
 
@@ -146,8 +156,7 @@ private:
     std::atomic<int32_t> worker_count_{0};
     int32_t configured_count_{0};
 
-    // PIMPL for GlobalQueue to avoid header dependency
-    std::unique_ptr<GlobalQueue> global_queue_;
+    GlobalQueue global_queue_;
 
     std::unique_ptr<TimerThread> timer_thread_;
     std::once_flag timer_init_flag_;
@@ -157,6 +166,8 @@ private:
     std::atomic<bool> running_{false};
     std::once_flag init_once_;
 };
+
+} // namespace bthread
 
 // ========== Coroutine Spawn Functions ==========
 
@@ -172,7 +183,7 @@ namespace coro {
  */
 template<typename T>
 Task<T> co_spawn(Task<T> task) {
-    return Scheduler::Instance().Spawn(std::move(task));
+    return bthread::Scheduler::Instance().Spawn(std::move(task));
 }
 
 /**
@@ -180,7 +191,7 @@ Task<T> co_spawn(Task<T> task) {
  */
 template<typename T>
 SafeTask<T> co_spawn(SafeTask<T> task) {
-    return Scheduler::Instance().Spawn(std::move(task));
+    return bthread::Scheduler::Instance().Spawn(std::move(task));
 }
 
 /**
@@ -189,7 +200,7 @@ SafeTask<T> co_spawn(SafeTask<T> task) {
  */
 template<typename T>
 void co_spawn_detached(Task<T> task) {
-    auto spawned = Scheduler::Instance().Spawn(std::move(task));
+    auto spawned = bthread::Scheduler::Instance().Spawn(std::move(task));
     spawned.release();
 }
 
@@ -198,10 +209,8 @@ void co_spawn_detached(Task<T> task) {
  */
 template<typename T>
 void co_spawn_detached(SafeTask<T> task) {
-    auto spawned = Scheduler::Instance().Spawn(std::move(task));
+    auto spawned = bthread::Scheduler::Instance().Spawn(std::move(task));
     spawned.release();
 }
 
 } // namespace coro
-
-} // namespace bthread

@@ -2,9 +2,9 @@
 // Phase 1 verification: Test that new unified headers compile correctly
 
 #include "bthread/core/task_meta_base.hpp"
-#include "bthread/task_meta.h"
+#include "bthread/core/task_meta.hpp"
 #include "coro/meta.h"
-#include "bthread/global_queue.h"
+#include "bthread/queue/global_queue.hpp"
 #include <iostream>
 
 int main() {

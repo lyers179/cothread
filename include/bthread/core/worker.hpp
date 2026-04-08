@@ -1,4 +1,4 @@
-// include/bthread/worker.h
+// include/bthread/core/worker.hpp
 #pragma once
 
 #include <atomic>
@@ -6,7 +6,7 @@
 #include <thread>
 
 #include "bthread/core/task_meta_base.hpp"
-#include "bthread/work_stealing_queue.h"
+#include "bthread/queue/work_stealing_queue.hpp"
 #include "bthread/platform/platform.h"
 
 // Forward declarations

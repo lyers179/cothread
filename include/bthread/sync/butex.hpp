@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <mutex>
 
-#include "bthread/task_meta.h"
+#include "bthread/core/task_meta.hpp"
 #include "bthread/platform/platform.h"
 
 namespace bthread {

@@ -7,9 +7,9 @@
 
 #include "bthread/core/task.hpp"
 #include "bthread/core/task_meta_base.hpp"
-#include "bthread/scheduler.h"
-#include "bthread/task_meta.h"
-#include "bthread/task_group.h"
+#include "bthread/core/scheduler.hpp"
+#include "bthread/core/task_meta.hpp"
+#include "bthread/core/task_group.hpp"
 #include "bthread/platform/platform.h"
 
 // Forward declarations for coroutine support

@@ -1,5 +1,5 @@
-#include "bthread/task_group.h"
-#include "bthread/butex.h"
+#include "bthread/core/task_group.hpp"
+#include "bthread/sync/butex.hpp"
 
 #include <cstdlib>
 
@@ -114,6 +114,21 @@ TaskMeta* TaskGroup::DecodeId(bthread_t tid) const {
 TaskGroup& GetTaskGroup() {
     static TaskGroup instance;
     return instance;
+}
+
+std::vector<TaskMeta*> TaskGroup::GetSuspendedTasks() const {
+    std::vector<TaskMeta*> suspended;
+    // Iterate through all slots and find SUSPENDED tasks
+    for (size_t i = 0; i < POOL_SIZE; ++i) {
+        TaskMeta* meta = task_pool_[i].load(std::memory_order_acquire);
+        if (meta) {
+            TaskState state = meta->state.load(std::memory_order_acquire);
+            if (state == TaskState::SUSPENDED) {
+                suspended.push_back(meta);
+            }
+        }
+    }
+    return suspended;
 }
 
 } // namespace bthread

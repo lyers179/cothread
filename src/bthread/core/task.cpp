@@ -1,9 +1,9 @@
 // src/bthread/core/task.cpp
 #include "bthread/core/task.hpp"
-#include "bthread/scheduler.h"
-#include "bthread/task_meta.h"
-#include "bthread/task_group.h"
-#include "bthread/butex.h"
+#include "bthread/core/scheduler.hpp"
+#include "bthread/core/task_meta.hpp"
+#include "bthread/core/task_group.hpp"
+#include "bthread/sync/butex.hpp"
 #include "coro/meta.h"
 
 namespace bthread {

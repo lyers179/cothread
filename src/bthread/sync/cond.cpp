@@ -1,8 +1,8 @@
 // src/bthread/sync/cond.cpp
 #include "bthread/sync/cond.hpp"
 #include "bthread/sync/mutex.hpp"
-#include "bthread/scheduler.h"
-#include "bthread/worker.h"
+#include "bthread/core/scheduler.hpp"
+#include "bthread/core/worker.hpp"
 #include "bthread/platform/platform.h"
 #include "coro/meta.h"
 

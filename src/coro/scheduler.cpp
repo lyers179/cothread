@@ -1,7 +1,7 @@
 // src/coro/scheduler.cpp
 #include "coro/scheduler.h"
 #include "coro/coroutine.h"
-#include "bthread/scheduler.h"
+#include "bthread/core/scheduler.hpp"
 #include <thread>
 #include <chrono>
 #include <cstdio>

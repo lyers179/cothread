@@ -1,4 +1,4 @@
-// include/bthread/task_meta.h
+// include/bthread/core/task_meta.hpp
 #pragma once
 
 #include <atomic>

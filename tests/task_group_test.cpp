@@ -1,6 +1,6 @@
 #include "bthread.h"
-#include "bthread/task_group.h"
-#include "bthread/task_meta.h"
+#include "bthread/core/task_group.hpp"
+#include "bthread/core/task_meta.hpp"
 
 #include <cstdio>
 #include <cassert>

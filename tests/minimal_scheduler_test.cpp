@@ -1,5 +1,5 @@
 #include "bthread.h"
-#include "bthread/scheduler.h"
+#include "bthread/core/scheduler.hpp"
 
 #include <cstdio>
 #include <cstdlib>

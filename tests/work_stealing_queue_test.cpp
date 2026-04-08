@@ -1,6 +1,6 @@
 #include "bthread.h"
-#include "bthread/work_stealing_queue.h"
-#include "bthread/task_meta.h"
+#include "bthread/queue/work_stealing_queue.hpp"
+#include "bthread/core/task_meta.hpp"
 
 #include <cstdio>
 #include <cassert>

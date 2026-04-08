@@ -1,11 +1,11 @@
 #include "bthread.h"
-#include "bthread/task_meta.h"
-#include "bthread/task_group.h"
-#include "bthread/worker.h"
-#include "bthread/scheduler.h"
-#include "bthread/butex.h"
-#include "bthread/once.h"
-#include "bthread/timer_thread.h"
+#include "bthread/core/task_meta.hpp"
+#include "bthread/core/task_group.hpp"
+#include "bthread/core/worker.hpp"
+#include "bthread/core/scheduler.hpp"
+#include "bthread/sync/butex.hpp"
+#include "bthread/api/once.hpp"
+#include "bthread/detail/timer_thread.hpp"
 #include "bthread/platform/platform.h"
 
 #include <cstring>

@@ -1,7 +1,7 @@
-#include "bthread/scheduler.h"
-#include "bthread/task_group.h"
-#include "bthread/timer_thread.h"
-#include "bthread/butex.h"
+#include "bthread/core/scheduler.hpp"
+#include "bthread/core/task_group.hpp"
+#include "bthread/detail/timer_thread.hpp"
+#include "bthread/sync/butex.hpp"
 #include "bthread/platform/platform.h"
 #include "coro/meta.h"
 #include "coro/coroutine.h"
@@ -64,6 +64,18 @@ void Scheduler::Shutdown() {
         for (auto* w : workers_) {
             w->Stop();
         }
+
+        // Wake all SUSPENDED tasks so they can detect shutdown and complete
+        auto suspended_tasks = GetTaskGroup().GetSuspendedTasks();
+        for (auto* task : suspended_tasks) {
+            // Clear is_waiting flag
+            task->is_waiting.store(false, std::memory_order_release);
+            task->waiting_butex = nullptr;
+            // Set state to READY and enqueue
+            task->state.store(TaskState::READY, std::memory_order_release);
+            EnqueueTask(task);
+        }
+
         // Shorter sleep, more attempts
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
@@ -122,6 +134,10 @@ Worker* Scheduler::GetWorker(int index) {
         return workers_[index];
     }
     return nullptr;
+}
+
+TaskGroup& Scheduler::task_group() {
+    return GetTaskGroup();
 }
 
 // ========== Unified Task Submission ==========

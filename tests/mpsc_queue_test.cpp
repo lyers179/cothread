@@ -5,7 +5,7 @@
 #include <atomic>
 #include <cassert>
 #include <cstdio>
-#include "bthread/scheduler.h"
+#include "bthread/core/scheduler.hpp"
 
 using namespace bthread;
 

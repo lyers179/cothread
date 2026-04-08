@@ -9,7 +9,7 @@
 #include <thread>
 #include "coro/meta.h"
 #include "coro/coroutine.h"
-#include "bthread/scheduler.h"  // Include full definition for Spawn()
+#include "bthread/core/scheduler.hpp"  // Include full definition for Spawn()
 
 namespace coro {
 
@@ -76,31 +76,5 @@ private:
     std::vector<std::unique_ptr<CoroutineMeta>> meta_pool_;
     std::mutex meta_mutex_;
 };
-
-// co_spawn function - now uses the unified scheduler
-template<typename T>
-Task<T> co_spawn(Task<T> task) {
-    return bthread::Scheduler::Instance().Spawn(std::move(task));
-}
-
-// co_spawn for SafeTask
-template<typename T>
-SafeTask<T> co_spawn(SafeTask<T> task) {
-    return bthread::Scheduler::Instance().Spawn(std::move(task));
-}
-
-// co_spawn_detached - fire and forget
-template<typename T>
-void co_spawn_detached(Task<T> task) {
-    auto spawned = bthread::Scheduler::Instance().Spawn(std::move(task));
-    spawned.release();
-}
-
-// co_spawn_detached for SafeTask
-template<typename T>
-void co_spawn_detached(SafeTask<T> task) {
-    auto spawned = bthread::Scheduler::Instance().Spawn(std::move(task));
-    spawned.release();
-}
 
 } // namespace coro
