@@ -6,7 +6,7 @@
 #include "bthread/core/task_group.hpp"
 #include "bthread/sync/butex.hpp"
 #include "bthread/platform/platform.h"
-#include "coro/meta.h"
+#include "coro/coroutine.h"
 
 #include <random>
 #include <cstring>
@@ -112,9 +112,21 @@ void Worker::RunBthread(TaskMeta* task) {
 }
 
 void Worker::RunCoroutine(coro::CoroutineMeta* meta) {
+    // Set current coroutine meta before resuming
+    coro::current_coro_meta_ = meta;
+    meta->state.store(TaskState::RUNNING, std::memory_order_release);
+
     // Resume the coroutine
     if (meta->handle && !meta->handle.done()) {
         meta->handle.resume();
+    }
+
+    // Clear current coroutine meta after resuming
+    coro::current_coro_meta_ = nullptr;
+
+    // Update state if coroutine completed
+    if (meta->handle && meta->handle.done()) {
+        meta->state.store(TaskState::FINISHED, std::memory_order_release);
     }
 }
 
