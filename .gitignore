@@ -28,4 +28,4 @@ pkg
 # Logs
 *.log
 
-benchmark/official_bthread_reference/
+benchmark/official_bthread_reference/build
