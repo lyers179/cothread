@@ -28,4 +28,12 @@ pkg
 # Logs
 *.log
 
+# Temporary test code (not tracked)
+temp/
+
+# Perf data files
+perf.data
+perf.data.old
+perf_*.data
+
 benchmark/official_bthread_reference/build
