@@ -62,8 +62,9 @@ int Butex::Wait(int expected_value, const platform::timespec* timeout, bool prep
         return ECANCELED;  // Operation cancelled due to shutdown
     }
 
-    // 1. Check value first
-    if (value_.load(std::memory_order_acquire) != expected_value) {
+    // 1. Check value first - use relaxed for quick check, will re-check with acquire
+    int val = value_.load(std::memory_order_relaxed);
+    if (val != expected_value) {
         return 0;
     }
 
@@ -80,8 +81,9 @@ int Butex::Wait(int expected_value, const platform::timespec* timeout, bool prep
     node->next.store(nullptr, std::memory_order_relaxed);
     node->claimed.store(false, std::memory_order_relaxed);
 
-    // 4. Double-check value after setting is_waiting
-    if (value_.load(std::memory_order_acquire) != expected_value) {
+    // 4. Double-check value after setting is_waiting - use acquire for synchronization
+    val = value_.load(std::memory_order_acquire);
+    if (val != expected_value) {
         // Value changed, remove ourselves
         task->is_waiting.store(false, std::memory_order_release);
         return 0;
@@ -160,19 +162,16 @@ void Butex::Wake(int count) {
         TaskMeta* waiter = queue_.PopFromHead();
         if (!waiter) break;
 
-        // Clear is_waiting - task is no longer waiting
-        waiter->is_waiting.store(false, std::memory_order_release);
-
-        // Increment wake_count - signals "we saw this task"
-        // Wait will detect this and handle waking itself
-        waiter->wake_count.fetch_add(1, std::memory_order_release);
+        // Use relaxed for is_waiting and wake_count - state CAS will synchronize
+        waiter->is_waiting.store(false, std::memory_order_relaxed);
+        waiter->wake_count.fetch_add(1, std::memory_order_relaxed);
 
         // Cancel pending timeout
         if (waiter->waiter.timer_id != 0) {
             Scheduler::Instance().GetTimerThread()->Cancel(waiter->waiter.timer_id);
         }
 
-        // Check if task is SUSPENDED
+        // Check if task is SUSPENDED - use acquire to see latest state
         TaskState state = waiter->state.load(std::memory_order_acquire);
         if (state == TaskState::SUSPENDED) {
             // Task is suspended, wake it up
