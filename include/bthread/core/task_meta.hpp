@@ -41,6 +41,11 @@ struct WaiterState {
  *
  * bthread uses assembly-based context switching with a dedicated stack,
  * unlike coroutines which use compiler-managed context.
+ *
+ * Memory layout optimized for cache locality:
+ * - Hot fields (context switching, scheduling) grouped first
+ * - Synchronization fields grouped second
+ * - Less frequently accessed fields grouped last
  */
 struct TaskMeta : TaskMetaBase {
     // Constructor - set type to BTHREAD
@@ -48,44 +53,35 @@ struct TaskMeta : TaskMetaBase {
         type = TaskType::BTHREAD;
     }
 
-    // ========== Stack Management (bthread-specific) ==========
+    // ========== Group 1: Context Switching (HOT - first cache line) ==========
     void* stack{nullptr};
     size_t stack_size{0};
-
-    // ========== Context (platform-dependent, bthread-specific) ==========
     platform::Context context{};
 
-    // ========== Entry Function and Result (bthread-specific) ==========
+    // ========== Group 2: Scheduling State (HOT) ==========
+    // Note: state is inherited from TaskMetaBase (atomic<TaskState>)
+    std::atomic<bool> is_waiting{false};  // Prevents ABA, replaces in_queue
+    std::atomic<int> wake_count{0};       // Number of Wake operations seen
+
+    // ========== Group 3: Synchronization (WARM) ==========
+    void* waiting_butex{nullptr};  ///< Butex pointer if waiting on one
+    WaiterState waiter;
+    ButexWaiterNode butex_waiter_node;  // Inline node, no dynamic alloc
+
+    // ========== Group 4: Entry Function and Result (COLD) ==========
     void* (*fn)(void*){nullptr};
     void* arg{nullptr};
     void* result{nullptr};
 
-    // ========== Reference Counting (bthread-specific) ==========
-    std::atomic<int> ref_count{0};
-
-    // ========== Join Support (bthread-specific) ==========
+    // ========== Group 5: Join Support (COLD) ==========
     void* join_butex{nullptr};  ///< Pointer to Butex
     std::atomic<int> join_waiters{0};
+    std::atomic<int> ref_count{0};
 
-    // ========== Butex Wait State (bthread-specific) ==========
-    void* waiting_butex{nullptr};  ///< Butex pointer if waiting on one
-    WaiterState waiter;
-
-    // ========== Lock-Free Wait Queue ==========
-    std::atomic<bool> is_waiting{false};  // Prevents ABA, replaces in_queue
-    std::atomic<int> wake_count{0};       // Number of Wake operations seen
-    ButexWaiterNode butex_waiter_node;    // Inline node, no dynamic alloc
-
-    // ========== XMM Lazy Saving ==========
+    // ========== Group 6: Other (COLD) ==========
     bool uses_xmm{false};  // True if task uses SIMD (xmm6-xmm15)
-
-    // ========== Worker Affinity (bthread-specific) ==========
     Worker* local_worker{nullptr};  ///< Worker affinity for task execution
-
-    // ========== Legacy Next Pointer (bthread-specific) ==========
-    /// Used for bthread-specific linked lists (e.g., Butex wait queue)
-    /// Note: TaskMetaBase::next is for scheduler queue, this is for sync primitives
-    TaskMeta* legacy_next{nullptr};
+    TaskMeta* legacy_next{nullptr};  ///< Used for bthread-specific linked lists
 
     // ========== Resume Implementation ==========
     void resume() override;
