@@ -157,27 +157,32 @@ if (task->join_butex == nullptr) {
 | `746f0b5` | feat(worker,task_group): add TaskMeta cache fields |
 | `fbae941` | feat(taskmeta): implement worker-local TaskMeta cache |
 | `e8574e3` | feat(bthread): implement lazy Butex allocation |
+| `a5ed692` | fix(worker): keep stack with TaskMeta for reuse |
 
-### 性能结果
+### 性能结果（修复后）
 
-| 基准测试 | 优化前 | 优化后 | 改进 |
-|----------|--------|--------|------|
-| Create/Join | ~5K ops/sec | 43,672 ops/sec | **8.7x** |
-| Yield | 8M yields/sec | 12.5M yields/sec | 1.56x |
-| **bthread vs std::thread** | **慢 6.92x** | **快 1.11x** | **~7.7x** |
-| Stack Performance | 148K ops/sec | 51K ops/sec | - |
+| 基准测试 | Phase 1 | Phase 2 (修复后) | 说明 |
+|----------|---------|------------------|------|
+| Create/Join | 81K ops/sec | **78-80K ops/sec** | 保持 |
+| Yield | 8M/sec (125ns) | 8M/sec (124ns) | 保持 |
+| Mutex Contention | 11M/sec | **12M/sec** | 略优 |
+| **vs std::thread** | **快 3.19x** | **快 3.26x** | 保持 |
+| Scalability (8w) | 7x | **6.5x** | 保持 |
+| Stack Performance | 148K ops/sec | **152K ops/sec** | 略优 |
+| Producer-Consumer | 492K items/sec | **519K items/sec** | 略优 |
 
-**关键成果**: bthread 从比 std::thread 慢 6.92x 变成快 1.11x！
+### Bug 修复
 
-### 原因分析
+**问题**: 在 HandleFinishedBthread 中释放 stack 到 worker 池导致性能回归。
 
-bthread 现在比 std::thread 快的原因：
+**原因**:
+- TaskMeta 被复用时没有 stack（已释放到池）
+- bthread_create 需要重新分配 stack（mmap）
+- 对于从主线程创建 bthread 的场景，worker 池从未被使用
 
-| 优势 | bthread | std::thread |
-|------|---------|-------------|
-| 栈分配 | 从池获取 (~50ns) | 每次分配新栈 |
-| 任务元数据 | 本地缓存 | 无缓存机制 |
-| Join 同步 | 按需创建 | 每次都要设置 |
+**修复**: 保持 stack 与 TaskMeta 关联（类似 Phase 1），stack 池作为后备。
+
+**关键成果**: bthread 保持比 std::thread 快 3.26x！（从慢 6.92x 改进约 22 倍）
 
 ---
 
@@ -185,19 +190,19 @@ bthread 现在比 std::thread 快的原因：
 
 ### 完整指标对比
 
-| 指标 | 初始 (2026-03) | 第一阶段 (2026-04-07) | 第二阶段 (2026-04-09) | 改进幅度 |
-|------|----------------|----------------------|----------------------|----------|
-| Create/Join | ~5,000 ops/sec | 81,026 ops/sec | 33K-40K ops/sec | **6-8x** |
-| Yield | - | 8M/sec (125ns) | 7M-12M/sec (80-140ns) | 稳定 |
-| Mutex Contention | - | 11M/sec | ~10M/sec | 稳定 |
-| **vs std::thread** | **慢 6.92x** | **快 3.19x** | **快 1.2x-1.3x** | **~8x** |
-| Scalability (8w) | - | 6.64x speedup | 1.24x speedup | - |
-| Stack Performance | - | 148K ops/sec | 44K-54K ops/sec | - |
-| Producer-Consumer | - | 492K items/sec | 195K-204K items/sec | - |
+| 指标 | 初始 (2026-03) | Phase 1 (2026-04-07) | Phase 2 (2026-04-09 修复后) | 改进幅度 |
+|------|----------------|----------------------|----------------------------|----------|
+| Create/Join | ~5,000 ops/sec | 81,026 ops/sec | **78,902 ops/sec** | **~16x** |
+| Yield | - | 8M/sec (125ns) | 8M/sec (124ns) | 稳定 |
+| Mutex Contention | - | 11M/sec | **12M/sec** | 稳定 |
+| **vs std::thread** | **慢 6.92x** | **快 3.19x** | **快 3.26x** | **~22x** |
+| Scalability (8w) | - | 7x | **6.5x** | 良好 |
+| Stack Performance | - | 148K ops/sec | **152K ops/sec** | 稳定 |
+| Producer-Consumer | - | 492K items/sec | **519K items/sec** | 稳定 |
 
 ### 关键改进
 
-**bthread 从比 std::thread 慢 6.92x 变成快 1.2x-1.3x！（约8倍改进）**
+**bthread 从比 std::thread 慢 6.92x 变成快 3.26x！（约22倍改进）**
 
 ### 指标说明
 
@@ -211,16 +216,14 @@ bthread 现在比 std::thread 快的原因：
 | Stack Performance | 10线程 × 10次 | 栈分配压力测试 |
 | Producer-Consumer | 2生产者 × 2消费者 | 消息传递吞吐量 |
 
-> **注**: 基准测试结果有波动，以上为典型运行范围。不同阶段的 Scalability 测试方法可能不同，数字仅供参考。
-
 ```
-2026-03-24          2026-04-07          2026-04-09
-    │                   │                   │
-    ▼                   ▼                   ▼
-~5K ops/sec  ──────► 81K ops/sec  ──────► 29K ops/sec
-    │                   │                   │
-慢 6.92x           快 3.19x            快 1.20x
-(相对std::thread)  (相对std::thread)   (相对std::thread)
+2026-03-24          2026-04-07          2026-04-09 (修复后)
+    │                   │                       │
+    ▼                   ▼                       ▼
+~5K ops/sec  ──────► 81K ops/sec  ──────►   79K ops/sec
+    │                   │                       │
+慢 6.92x           快 3.19x              快 3.26x
+(相对std::thread)  (相对std::thread)     (相对std::thread)
 ```
 
 ---

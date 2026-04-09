@@ -29,35 +29,35 @@
 | Stack Performance | 148,750 ops/sec |
 | Producer-Consumer | 492,732 items/sec |
 
-### 第二阶段优化后（2026-04-09）
+### 第二阶段优化后（2026-04-09 修复后）
 
 | 基准测试 | 结果 | 说明 |
 |----------|------|------|
-| Create/Join | 33K-40K ops/sec | 创建/销毁吞吐量 |
-| Yield | 7M-12M/sec (80-140ns) | 让步性能 |
-| Mutex Contention | ~10M lock/unlock/sec | 高竞争锁性能 |
-| **vs std::thread** | **快 1.2x-1.3x** | 与原生线程对比 |
-| Scalability (16w) | 1.3x-1.4x speedup | work-stealing 扩展性 |
-| Stack Performance | 44K-54K ops/sec | 栈分配压力测试 |
-| Producer-Consumer | 195K-204K items/sec | 消息传递吞吐量 |
+| Create/Join | 78,902 ops/sec | 创建/销毁吞吐量 |
+| Yield | 8,074,332/sec (124ns) | 让步性能 |
+| Mutex Contention | 12,278,187 lock/unlock/sec | 高竞争锁性能 |
+| **vs std::thread** | **快 3.26x** | 与原生线程对比 |
+| Scalability (8w) | 6.56x speedup | work-stealing 扩展性 |
+| Stack Performance | 151,775 ops/sec | 栈分配压力测试 |
+| Producer-Consumer | 519,090 items/sec | 消息传递吞吐量 |
 
 ### 关键改进
 
-**bthread 从比 std::thread 慢 6.92x 变成快 1.2x-1.3x！**
+**bthread 从比 std::thread 慢 6.92x 变成快 3.26x！（约22倍改进）**
 
 ### 完整指标对比
 
-| 指标 | 初始 (2026-03) | 第一阶段 (2026-04-07) | 第二阶段 (2026-04-09) | 改进幅度 |
-|------|----------------|----------------------|----------------------|----------|
-| Create/Join | ~5K ops/sec | 81K ops/sec | 33K-40K ops/sec | **6-8x** |
-| Yield | - | 8M/sec (125ns) | 7M-12M/sec (80-140ns) | 稳定 |
-| Mutex Contention | - | 11M/sec | ~10M/sec | 稳定 |
-| **vs std::thread** | **慢 6.92x** | **快 3.19x** | **快 1.2x-1.3x** | **~8x** |
-| Scalability (8w) | - | 6.64x | 1.24x | - |
-| Stack Performance | - | 148K ops/sec | 44K-54K ops/sec | - |
-| Producer-Consumer | - | 492K items/sec | 195K-204K items/sec | - |
+| 指标 | 初始 (2026-03) | 第一阶段 (2026-04-07) | 第二阶段 (2026-04-09 修复后) | 改进幅度 |
+|------|----------------|----------------------|----------------------------|----------|
+| Create/Join | ~5K ops/sec | 81K ops/sec | **79K ops/sec** | **~16x** |
+| Yield | - | 8M/sec (125ns) | 8M/sec (124ns) | 稳定 |
+| Mutex Contention | - | 11M/sec | **12M/sec** | 稳定 |
+| **vs std::thread** | **慢 6.92x** | **快 3.19x** | **快 3.26x** | **~22x** |
+| Scalability (8w) | - | 6.64x | **6.56x** | 良好 |
+| Stack Performance | - | 148K ops/sec | **152K ops/sec** | 稳定 |
+| Producer-Consumer | - | 492K items/sec | **519K items/sec** | 稳定 |
 
-> **注**: 基准测试结果有波动，以上为典型运行范围。Scalability 测试方法在不同阶段可能不同，数字仅供参考。
+> **注**: 第二阶段优化中曾出现性能回归，原因是 HandleFinishedBthread 中释放 stack 到 worker 池导致 TaskMeta 复用时无 stack。修复后保持 stack 与 TaskMeta 关联。
 
 **MPSC Queue 性能测试** (`tests/perf/mpsc_perf_test.cpp`):
 
