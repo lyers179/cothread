@@ -24,6 +24,12 @@ public:
     // Allocate TaskMeta from pool, returns nullptr if exhausted
     TaskMeta* AllocTaskMeta();
 
+    // Allocate multiple TaskMeta slots at once (reduces CAS operations)
+    int AllocMultipleSlots(int32_t* slots, int count);
+
+    // Get or create TaskMeta for a slot (used by Worker cache refill)
+    TaskMeta* GetOrCreateTaskMeta(int32_t slot);
+
     // Recycle TaskMeta back to pool
     void DeallocTaskMeta(TaskMeta* task);
 

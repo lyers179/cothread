@@ -82,11 +82,21 @@ public:
     static constexpr int STACK_POOL_SIZE = 8;
     static constexpr size_t DEFAULT_STACK_SIZE = 8192;
 
+    // TaskMeta cache configuration
+    static constexpr int TASK_CACHE_SIZE = 4;
+
     // Stack pool operations
     void* AcquireStack(size_t size = DEFAULT_STACK_SIZE);
     void ReleaseStack(void* stack_top, size_t size);
     int stack_pool_count() const { return stack_pool_count_; }
     void DrainStackPool();
+
+    // TaskMeta cache operations
+    TaskMeta* AcquireTaskMeta();
+    void ReleaseTaskMeta(TaskMeta* meta);
+    int task_cache_count() const { return task_cache_count_; }
+    void DrainTaskCache();
+    void RefillTaskCache();
 
     // Get current worker (thread-local)
     static Worker* Current();
@@ -119,6 +129,10 @@ private:
     // Stack pool - reusable stacks to avoid mmap/munmap overhead
     void* stack_pool_[STACK_POOL_SIZE];
     int stack_pool_count_{0};
+
+    // TaskMeta cache - reusable TaskMetas to avoid global CAS contention
+    TaskMeta* task_cache_[TASK_CACHE_SIZE];
+    int task_cache_count_{0};
 
     // Stop flag - set to non-zero to stop the worker
     std::atomic<int> stop_flag_{0};
