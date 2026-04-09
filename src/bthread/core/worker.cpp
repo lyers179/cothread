@@ -402,12 +402,8 @@ void Worker::HandleFinishedBthread(TaskMeta* task) {
         Scheduler::Instance().WakeButex(task->join_butex, INT_MAX);
     }
 
-    // Release stack to pool
-    if (task->stack) {
-        ReleaseStack(task->stack, task->stack_size);
-        task->stack = nullptr;
-        task->stack_size = 0;
-    }
+    // Note: Keep stack with TaskMeta for reuse
+    // The stack pool is used when TaskMeta doesn't have a suitable stack
 
     // Release reference - return to cache if ref count reaches 0
     if (task->Release()) {
