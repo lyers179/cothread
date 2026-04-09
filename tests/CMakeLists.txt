@@ -40,3 +40,6 @@ add_test(NAME coroutine_test COMMAND coroutine_test)
 add_executable(stack_pool_test stack_pool_test.cpp)
 target_link_libraries(stack_pool_test bthread gtest gtest_main)
 add_test(NAME StackPoolTest COMMAND stack_pool_test)
+
+# Performance tests (requires gtest and benchmark)
+add_subdirectory(perf)

@@ -15,11 +15,21 @@
 
 | 基准测试 | 结果 |
 |----------|------|
-| Create/Join | 67,088 ops/sec |
-| Yield | 8,188,650 yields/sec (122 ns/yield) |
-| Mutex Contention | 11,975,331 lock/unlock/sec |
-| vs std::thread | 110.96x faster |
-| Scalability (8 workers) | 6.97x speedup vs 1 worker |
+| Create/Join | 81,026 ops/sec |
+| Yield | 8,002,961 yields/sec (125 ns/yield) |
+| Mutex Contention | 11,028,945 lock/unlock/sec |
+| vs std::thread | 3.19x faster |
+| Scalability (8 workers) | 6.64x speedup vs 1 worker |
+| Stack Performance | 148,750 ops/sec |
+| Producer-Consumer | 492,732 items/sec |
+
+**MPSC Queue 性能测试** (`tests/perf/mpsc_perf_test.cpp`):
+
+| 测试 | 结果 |
+|------|------|
+| High contention (4 producers) | ~69K ops/sec |
+| PopMultiple (batch 16) | ~7.2M ops/sec |
+| Adaptive spin | ~1.1M ops/sec |
 
 ## 优化详情
 
