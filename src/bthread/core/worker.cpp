@@ -24,7 +24,8 @@ Worker::Worker(int id) : id_(id) {
 }
 
 Worker::~Worker() {
-    // Thread cleanup handled by scheduler
+    // Drain stack pool before destruction
+    DrainStackPool();
 }
 
 Worker* Worker::Current() {
