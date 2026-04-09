@@ -141,6 +141,9 @@ private:
     // WaitOnAddress on this counter handles races inherently
     std::atomic<int> wake_count_{0};
 
+    // Idle flag - true when worker is waiting in futex
+    std::atomic<bool> is_idle_{false};
+
     static thread_local Worker* current_worker_;
 };
 

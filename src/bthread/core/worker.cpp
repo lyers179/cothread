@@ -258,8 +258,14 @@ void Worker::WaitForTask() {
         }
 
         // Spin complete, enter futex wait
+        // Set idle flag before waiting so WakeUp can skip unnecessary futex calls
+        is_idle_.store(true, std::memory_order_release);
+
         int expected = wake_count_.load(std::memory_order_acquire);
         int result = platform::FutexWait(&wake_count_, expected, &ts);
+
+        // Clear idle flag after waking
+        is_idle_.store(false, std::memory_order_release);
 
         // On timeout, reset spin counter and continue
         if (result == ETIMEDOUT) {
@@ -273,6 +279,11 @@ void Worker::WaitForTask() {
 }
 
 void Worker::WakeUp() {
+    // Only do futex wake if worker is actually idle
+    // This avoids unnecessary syscalls when worker is running
+    if (!is_idle_.load(std::memory_order_acquire)) {
+        return;
+    }
     wake_count_.fetch_add(1, std::memory_order_release);
     platform::FutexWake(&wake_count_, 1);
 }
@@ -363,6 +374,8 @@ void Worker::DrainTaskCache() {
 
 void Worker::Stop() {
     stop_flag_.store(1, std::memory_order_seq_cst);
+    // Clear idle flag to ensure WakeUp will work
+    is_idle_.store(false, std::memory_order_release);
     wake_count_.fetch_add(1, std::memory_order_seq_cst);
     // Wake ALL waiting threads on this wake_count_
     platform::FutexWake(&wake_count_, INT_MAX);

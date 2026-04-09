@@ -163,10 +163,9 @@ void Scheduler::Submit(TaskMetaBase* task) {
     } else {
         // Not in a worker thread, push to global queue
         global_queue_.Push(task);
-        // Wake up all workers to ensure tasks are processed
-        // Use WakeAllWorkers instead of WakeIdleWorkers to handle the race condition
-        // where workers might not be in WaitForTask() yet
-        WakeAllWorkers();
+        // Wake up ONE idle worker - no need to wake all workers for a single task
+        // Workers will steal from global queue if their local queue is empty
+        WakeIdleWorkers(1);
     }
 }
 
