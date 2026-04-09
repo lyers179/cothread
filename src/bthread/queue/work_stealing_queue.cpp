@@ -51,21 +51,27 @@ TaskMetaBase* WorkStealingQueue::Pop() {
 }
 
 TaskMetaBase* WorkStealingQueue::Steal() {
-    uint64_t h = head_.load(std::memory_order_acquire);
-    uint64_t t = tail_.load(std::memory_order_acquire);
+    // Use CAS weak + retry for better performance under contention
+    constexpr int MAX_STEAL_ATTEMPTS = 3;
 
-    if (ExtractIndex(h) == ExtractIndex(t)) {
-        return nullptr;  // Empty
-    }
+    for (int attempt = 0; attempt < MAX_STEAL_ATTEMPTS; ++attempt) {
+        uint64_t h = head_.load(std::memory_order_acquire);
+        uint64_t t = tail_.load(std::memory_order_acquire);
 
-    uint32_t idx = ExtractIndex(h);
-    TaskMetaBase* task = buffer_[idx].load(std::memory_order_acquire);
+        if (ExtractIndex(h) == ExtractIndex(t)) {
+            return nullptr;  // Empty
+        }
 
-    // Try to claim this slot
-    if (head_.compare_exchange_strong(h,
-            MakeVal(ExtractVersion(h) + 1, (idx + 1) % CAPACITY),
-            std::memory_order_acq_rel, std::memory_order_acquire)) {
-        return task;
+        uint32_t idx = ExtractIndex(h);
+        TaskMetaBase* task = buffer_[idx].load(std::memory_order_acquire);
+
+        // Use weak CAS - faster under contention, will retry on failure
+        if (head_.compare_exchange_weak(h,
+                MakeVal(ExtractVersion(h) + 1, (idx + 1) % CAPACITY),
+                std::memory_order_acq_rel, std::memory_order_relaxed)) {
+            return task;
+        }
+        // CAS failed due to contention, retry
     }
 
     return nullptr;
