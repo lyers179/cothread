@@ -54,10 +54,15 @@ int bthread_create(bthread_t* tid, const bthread_attr_t* attr,
     TaskMeta* task = GetTaskGroup().AllocTaskMeta();
     if (!task) return EAGAIN;
 
-    // Set up stack
+    // Set up stack - use worker's pool if available
     size_t stack_size = attr ? attr->stack_size : BTHREAD_STACK_SIZE_DEFAULT;
     if (!task->stack) {
-        task->stack = AllocateStack(stack_size);
+        Worker* w = Worker::Current();
+        if (w) {
+            task->stack = w->AcquireStack(stack_size);
+        } else {
+            task->stack = AllocateStack(stack_size);
+        }
         if (!task->stack) {
             GetTaskGroup().DeallocTaskMeta(task);
             return ENOMEM;
