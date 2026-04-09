@@ -60,11 +60,15 @@ void Mutex::lock() {
 }
 
 void Mutex::lock_bthread() {
-    // Fast path: try to acquire without waiters flag
-    uint32_t expected = 0;
-    if (state_.compare_exchange_strong(expected, LOCKED,
-            std::memory_order_acquire, std::memory_order_relaxed)) {
-        return;
+    // Fast path: relaxed check first, then try CAS
+    uint32_t state = state_.load(std::memory_order_relaxed);
+    if (state == 0) {
+        // Lock appears free, try to acquire with acquire ordering
+        uint32_t expected = 0;
+        if (state_.compare_exchange_strong(expected, LOCKED,
+                std::memory_order_acquire, std::memory_order_relaxed)) {
+            return;
+        }
     }
 
     // Create butex if needed
@@ -85,12 +89,12 @@ void Mutex::lock_bthread() {
     bool first_wait = true;
 
     while (true) {
-        expected = state_.load(std::memory_order_acquire);
+        state = state_.load(std::memory_order_acquire);
 
-        if ((expected & LOCKED) == 0) {
+        if ((state & LOCKED) == 0) {
             // Lock appears free, try to acquire
-            uint32_t new_val = LOCKED | (expected & HAS_WAITERS);
-            if (state_.compare_exchange_strong(expected, new_val,
+            uint32_t new_val = LOCKED | (state & HAS_WAITERS);
+            if (state_.compare_exchange_strong(state, new_val,
                     std::memory_order_acquire, std::memory_order_relaxed)) {
                 return;
             }
@@ -98,8 +102,8 @@ void Mutex::lock_bthread() {
         }
 
         // Lock is held, mark that we're waiting
-        if ((expected & HAS_WAITERS) == 0) {
-            if (!state_.compare_exchange_strong(expected, expected | HAS_WAITERS,
+        if ((state & HAS_WAITERS) == 0) {
+            if (!state_.compare_exchange_strong(state, state | HAS_WAITERS,
                     std::memory_order_release, std::memory_order_relaxed)) {
                 continue;
             }
@@ -109,10 +113,10 @@ void Mutex::lock_bthread() {
         Butex* butex = static_cast<Butex*>(butex_.load(std::memory_order_acquire));
 
         // Double-check lock state before getting generation
-        expected = state_.load(std::memory_order_acquire);
-        if ((expected & LOCKED) == 0) {
-            uint32_t new_val = LOCKED | (expected & HAS_WAITERS);
-            if (state_.compare_exchange_strong(expected, new_val,
+        state = state_.load(std::memory_order_acquire);
+        if ((state & LOCKED) == 0) {
+            uint32_t new_val = LOCKED | (state & HAS_WAITERS);
+            if (state_.compare_exchange_strong(state, new_val,
                     std::memory_order_acquire, std::memory_order_relaxed)) {
                 return;
             }
