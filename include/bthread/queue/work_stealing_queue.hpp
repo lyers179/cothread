@@ -54,6 +54,17 @@ public:
      */
     bool Empty() const;
 
+    /**
+     * @brief Pop multiple tasks from tail (owner only).
+     * @param buffer Buffer to store popped tasks
+     * @param max_count Maximum tasks to pop
+     * @return Number of tasks actually popped
+     *
+     * This is more efficient than calling Pop() multiple times
+     * for batch processing.
+     */
+    int PopMultiple(TaskMetaBase** buffer, int max_count);
+
 private:
     // Helper for packing/unpacking version and index
     static uint32_t ExtractIndex(uint64_t v) { return v & 0xFFFFFFFF; }

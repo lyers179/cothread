@@ -160,24 +160,15 @@ TaskMetaBase* Worker::PickTask() {
         return local_batch_[--batch_count_];
     }
 
-    // 2. Try local queue with batch prefill
-    TaskMetaBase* task = local_queue_.Pop();
-    if (task) {
-        local_batch_[batch_count_++] = task;
-        // Prefill batch
-        for (int i = 0; i < BATCH_SIZE - 1 && batch_count_ < BATCH_SIZE; ++i) {
-            TaskMetaBase* t2 = local_queue_.Pop();
-            if (t2) {
-                local_batch_[batch_count_++] = t2;
-            } else {
-                break;
-            }
-        }
+    // 2. Try local queue - batch pop for efficiency
+    int popped = local_queue_.PopMultiple(local_batch_, BATCH_SIZE);
+    if (popped > 0) {
+        batch_count_ = popped;
         return local_batch_[--batch_count_];
     }
 
     // 3. Try global queue
-    task = Scheduler::Instance().global_queue().Pop();
+    TaskMetaBase* task = Scheduler::Instance().global_queue().Pop();
     if (task) return task;
 
     // 4. Try work stealing

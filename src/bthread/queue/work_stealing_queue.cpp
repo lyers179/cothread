@@ -77,4 +77,14 @@ bool WorkStealingQueue::Empty() const {
     return ExtractIndex(h) == ExtractIndex(t);
 }
 
+int WorkStealingQueue::PopMultiple(TaskMetaBase** buffer, int max_count) {
+    int count = 0;
+    while (count < max_count) {
+        TaskMetaBase* task = Pop();
+        if (!task) break;
+        buffer[count++] = task;
+    }
+    return count;
+}
+
 } // namespace bthread

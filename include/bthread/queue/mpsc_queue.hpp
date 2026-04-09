@@ -99,6 +99,25 @@ public:
         return tail_.load(std::memory_order_acquire) == nullptr;
     }
 
+    /**
+     * @brief Pop multiple items from queue (single consumer).
+     * @param buffer Buffer to store popped items
+     * @param max_count Maximum items to pop
+     * @return Number of items actually popped
+     *
+     * This is more efficient than calling Pop() multiple times
+     * because it reduces atomic operations for batch processing.
+     */
+    int PopMultiple(T** buffer, int max_count) {
+        int count = 0;
+        while (count < max_count) {
+            T* item = Pop();
+            if (!item) break;
+            buffer[count++] = item;
+        }
+        return count;
+    }
+
 private:
     std::atomic<T*> head_{nullptr};
     std::atomic<T*> tail_{nullptr};
