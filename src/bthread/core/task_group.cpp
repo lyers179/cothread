@@ -34,8 +34,9 @@ TaskMeta* TaskGroup::AllocTaskMeta() {
     int32_t slot = free_head_.load(std::memory_order_acquire);
     while (slot >= 0) {
         int32_t next = free_slots_[slot].load(std::memory_order_relaxed);
+        // Use relaxed on failure - we just retry anyway
         if (free_head_.compare_exchange_weak(slot, next,
-                std::memory_order_acq_rel, std::memory_order_acquire)) {
+                std::memory_order_acq_rel, std::memory_order_relaxed)) {
             // Got a slot from free list
             TaskMeta* meta = task_pool_[slot].load(std::memory_order_relaxed);
 
