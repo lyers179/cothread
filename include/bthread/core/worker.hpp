@@ -78,11 +78,21 @@ public:
     platform::ThreadId thread() const { return thread_; }
     void set_thread(platform::ThreadId tid) { thread_ = tid; }
 
+    // Stack pool operations
+    void* AcquireStack(size_t size = DEFAULT_STACK_SIZE);
+    void ReleaseStack(void* stack_top, size_t size);
+    int stack_pool_count() const { return stack_pool_count_; }
+    void DrainStackPool();
+
     // Get current worker (thread-local)
     static Worker* Current();
 
 private:
     static constexpr int BATCH_SIZE = 8;
+
+    // Stack pool configuration
+    static constexpr int STACK_POOL_SIZE = 8;
+    static constexpr size_t DEFAULT_STACK_SIZE = 8192;
 
     // Handle task after it finishes running
     void HandleTaskAfterRun(TaskMetaBase* task);
@@ -105,6 +115,10 @@ private:
     // Batch for reducing queue operations
     TaskMetaBase* local_batch_[BATCH_SIZE];
     int batch_count_{0};
+
+    // Stack pool - reusable stacks to avoid mmap/munmap overhead
+    void* stack_pool_[STACK_POOL_SIZE];
+    int stack_pool_count_{0};
 
     // Stop flag - set to non-zero to stop the worker
     std::atomic<int> stop_flag_{0};
