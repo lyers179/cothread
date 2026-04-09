@@ -151,8 +151,12 @@ private:
     // Wake all workers
     void WakeAllWorkers();
 
+    static constexpr int MAX_WORKERS = 256;
+
     std::vector<Worker*> workers_;
     std::mutex workers_mutex_;
+    // Atomic array for lock-free worker access in WakeIdleWorkers
+    std::atomic<Worker*> workers_atomic_[MAX_WORKERS];
     std::atomic<int32_t> worker_count_{0};
     int32_t configured_count_{0};
 

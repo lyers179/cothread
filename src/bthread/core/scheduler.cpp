@@ -117,6 +117,8 @@ void Scheduler::StartWorkers(int count) {
             static_cast<Worker*>(arg)->Run();
         }, w));
         workers_.push_back(w);
+        // Also store in atomic array for lock-free wake
+        workers_atomic_[i].store(w, std::memory_order_release);
     }
     worker_count_.store(count, std::memory_order_release);
 }
@@ -129,9 +131,9 @@ void Scheduler::WakeAllWorkers() {
 }
 
 Worker* Scheduler::GetWorker(int index) {
-    std::lock_guard<std::mutex> lock(workers_mutex_);
-    if (index >= 0 && index < static_cast<int>(workers_.size())) {
-        return workers_[index];
+    // Use atomic array for lock-free access
+    if (index >= 0 && index < MAX_WORKERS) {
+        return workers_atomic_[index].load(std::memory_order_acquire);
     }
     return nullptr;
 }
@@ -237,12 +239,16 @@ void Scheduler::WakeButex(void* butex, int count) {
 }
 
 void Scheduler::WakeIdleWorkers(int count) {
-    std::lock_guard<std::mutex> lock(workers_mutex_);
+    // Use atomic array for lock-free wake - avoids mutex contention
+    int wc = worker_count_.load(std::memory_order_acquire);
     int woken = 0;
-    for (auto* w : workers_) {
-        if (woken >= count) break;
-        w->WakeUp();
-        ++woken;
+
+    for (int i = 0; i < wc && woken < count; ++i) {
+        Worker* w = workers_atomic_[i].load(std::memory_order_acquire);
+        if (w) {
+            w->WakeUp();
+            ++woken;
+        }
     }
 }
 
