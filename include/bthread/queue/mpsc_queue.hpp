@@ -68,8 +68,22 @@ public:
         }
 
         // Race condition: another thread just pushed
+        // Adaptive spin before yielding - reduces context switches
+        constexpr int MAX_SPINS = 100;  // Spin 100 times before yielding
+        int spin_count = 0;
         while (!t->next.load(std::memory_order_acquire)) {
-            std::this_thread::yield();
+            if (++spin_count < MAX_SPINS) {
+                // Use pause instruction on x86 to reduce power consumption
+                #if defined(__x86_64__) || defined(_M_X64)
+                __builtin_ia32_pause();
+                #else
+                // Other architectures use compiler barrier
+                std::atomic_signal_fence(std::memory_order_acquire);
+                #endif
+            } else {
+                std::this_thread::yield();
+                spin_count = 0;  // Reset after yield to continue spinning
+            }
         }
         T* n = static_cast<T*>(t->next.load(std::memory_order_acquire));
         tail_.store(n, std::memory_order_release);
