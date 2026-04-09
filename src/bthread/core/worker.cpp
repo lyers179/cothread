@@ -207,12 +207,15 @@ void Worker::Resume(TaskMetaBase* task) {
 }
 
 void Worker::WaitForTask() {
-    // Wait on wake_count_ with timeout to handle race conditions
-    // Timeout ensures we periodically check the stop flag
+    // Adaptive spin before futex wait to reduce kernel calls
+    constexpr int MAX_SPINS = 50;        // Spin 50 times before futex wait
+    constexpr int SPIN_CHECK_INTERVAL = 5;  // Check queue every 5 spins
 
     platform::timespec ts;
     ts.tv_sec = 0;
     ts.tv_nsec = 1000000;  // 1ms timeout for faster response
+
+    int spin_count = 0;
 
     while (stop_flag_.load(std::memory_order_seq_cst) == 0) {
         // Check for tasks first
@@ -221,16 +224,38 @@ void Worker::WaitForTask() {
             return;
         }
 
-        // Read current wake_count before waiting
-        int expected = wake_count_.load(std::memory_order_acquire);
+        // Adaptive spinning phase
+        if (spin_count < MAX_SPINS) {
+            #if defined(__x86_64__) || defined(_M_X64)
+            __builtin_ia32_pause();
+            #else
+            std::atomic_signal_fence(std::memory_order_acquire);
+            #endif
 
-        // Wait for wake_count_ to change or timeout
-        int result = platform::FutexWait(&wake_count_, expected, &ts);
+            ++spin_count;
 
-        // On timeout, re-check stop flag and continue
-        if (result == ETIMEDOUT) {
+            // Periodically check queue during spin
+            if (spin_count % SPIN_CHECK_INTERVAL == 0) {
+                if (!local_queue_.Empty() ||
+                    !Scheduler::Instance().global_queue().Empty()) {
+                    return;  // Task available, exit wait
+                }
+            }
             continue;
         }
+
+        // Spin complete, enter futex wait
+        int expected = wake_count_.load(std::memory_order_acquire);
+        int result = platform::FutexWait(&wake_count_, expected, &ts);
+
+        // On timeout, reset spin counter and continue
+        if (result == ETIMEDOUT) {
+            spin_count = 0;
+            continue;
+        }
+
+        // After waking from futex, reset spin counter
+        spin_count = 0;
     }
 }
 
