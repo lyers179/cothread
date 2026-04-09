@@ -8,8 +8,9 @@
 #include "bthread/platform/platform.h"
 #include "coro/coroutine.h"
 
-#include <random>
 #include <cstring>
+#include <functional>  // for std::hash
+#include <thread>      // for std::this_thread
 
 namespace bthread {
 
@@ -175,11 +176,19 @@ TaskMetaBase* Worker::PickTask() {
     int32_t wc = Scheduler::Instance().worker_count();
     if (wc <= 1) return nullptr;
 
-    int attempts = wc * 3;
-    static thread_local std::mt19937 rng(std::random_device{}());
+    // Use lightweight XOR shift RNG instead of mt19937
+    // Faster and sufficient for work stealing randomization
+    static thread_local uint32_t rng_state = static_cast<uint32_t>(
+        std::hash<std::thread::id>{}(std::this_thread::get_id()) ^ 0x2654435761u);
 
+    int attempts = wc * 3;
     for (int i = 0; i < attempts; ++i) {
-        int victim = (id_ + rng()) % wc;
+        // XOR shift - fast random number generation
+        rng_state ^= rng_state << 13;
+        rng_state ^= rng_state >> 17;
+        rng_state ^= rng_state << 5;
+
+        int victim = rng_state % wc;
         if (victim == id_) continue;
 
         Worker* other = Scheduler::Instance().GetWorker(victim);
