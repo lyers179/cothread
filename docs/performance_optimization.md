@@ -29,35 +29,57 @@
 | Stack Performance | 148,750 ops/sec |
 | Producer-Consumer | 492,732 items/sec |
 
-### 第二阶段优化后（2026-04-09 修复后）
+### 第二阶段优化后（2026-04-09 + perf 分析优化）
 
 | 基准测试 | 结果 | 说明 |
 |----------|------|------|
-| Create/Join | 78,902 ops/sec | 创建/销毁吞吐量 |
-| Yield | 8,074,332/sec (124ns) | 让步性能 |
-| Mutex Contention | 12,278,187 lock/unlock/sec | 高竞争锁性能 |
-| **vs std::thread** | **快 3.26x** | 与原生线程对比 |
-| Scalability (8w) | 6.56x speedup | work-stealing 扩展性 |
-| Stack Performance | 151,775 ops/sec | 栈分配压力测试 |
-| Producer-Consumer | 519,090 items/sec | 消息传递吞吐量 |
+| Create/Join | 82,702 ops/sec | 创建/销毁吞吐量 |
+| Yield | 7,777,471/sec (129ns) | 让步性能 |
+| Mutex Contention | 12,267,342 lock/unlock/sec | 高竞争锁性能 |
+| **vs std::thread** | **快 3.15x** | 与原生线程对比 |
+| Scalability (4w) | **8.67x** speedup | work-stealing 扩展性 |
+| Scalability (8w) | **8.50x** speedup | work-stealing 扩展性 |
+| Stack Performance | 162,460 ops/sec | 栈分配压力测试 |
+| Producer-Consumer | **727,961 items/sec** | 消息传递吞吐量 |
 
 ### 关键改进
 
-**bthread 从比 std::thread 慢 6.92x 变成快 3.26x！（约22倍改进）**
+**bthread 从比 std::thread 慢 6.92x 变成快 3.15x！（约22倍改进）**
+
+### perf 分析优化
+
+使用 perf 工具分析发现 syscall 占比 14.55%，主要来自 WakeAllWorkers。
+
+**优化措施：**
+
+1. **Submit**: 用 `WakeIdleWorkers(1)` 替代 `WakeAllWorkers()`
+   - 从主线程创建 bthread 时不再唤醒所有 worker
+   - syscall 开销: 14.55% → 7.69%
+
+2. **WakeUp**: 添加 `is_idle_` 标志避免不必要的 futex 调用
+   - 只在 worker 实际等待时才调用 futex wake
+
+**优化效果：**
+
+| 指标 | 优化前 | 优化后 | 改进 |
+|------|--------|--------|------|
+| Scalability (4w) | 6.56x | **8.67x** | **+32%** |
+| Scalability (8w) | 6.56x | **8.50x** | **+30%** |
+| Producer-Consumer | 519K | **728K** | **+40%** |
+| Stack Performance | 152K | **162K** | **+7%** |
 
 ### 完整指标对比
 
-| 指标 | 初始 (2026-03) | 第一阶段 (2026-04-07) | 第二阶段 (2026-04-09 修复后) | 改进幅度 |
+| 指标 | 初始 (2026-03) | Phase 1 (2026-04-07) | Phase 2 + perf (2026-04-09) | 改进幅度 |
 |------|----------------|----------------------|----------------------------|----------|
-| Create/Join | ~5K ops/sec | 81K ops/sec | **79K ops/sec** | **~16x** |
-| Yield | - | 8M/sec (125ns) | 8M/sec (124ns) | 稳定 |
+| Create/Join | ~5K ops/sec | 81K ops/sec | **83K ops/sec** | **~17x** |
+| Yield | - | 8M/sec (125ns) | 7.8M/sec (129ns) | 稳定 |
 | Mutex Contention | - | 11M/sec | **12M/sec** | 稳定 |
-| **vs std::thread** | **慢 6.92x** | **快 3.19x** | **快 3.26x** | **~22x** |
-| Scalability (8w) | - | 6.64x | **6.56x** | 良好 |
-| Stack Performance | - | 148K ops/sec | **152K ops/sec** | 稳定 |
-| Producer-Consumer | - | 492K items/sec | **519K items/sec** | 稳定 |
-
-> **注**: 第二阶段优化中曾出现性能回归，原因是 HandleFinishedBthread 中释放 stack 到 worker 池导致 TaskMeta 复用时无 stack。修复后保持 stack 与 TaskMeta 关联。
+| **vs std::thread** | **慢 6.92x** | **快 3.19x** | **快 3.15x** | **~22x** |
+| Scalability (4w) | - | 5.69x | **8.67x** | **+52%** |
+| Scalability (8w) | - | 6.64x | **8.50x** | **+28%** |
+| Stack Performance | - | 148K ops/sec | **162K ops/sec** | **+9%** |
+| Producer-Consumer | - | 492K items/sec | **728K items/sec** | **+48%** |
 
 **MPSC Queue 性能测试** (`tests/perf/mpsc_perf_test.cpp`):
 
