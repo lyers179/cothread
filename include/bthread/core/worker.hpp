@@ -78,6 +78,10 @@ public:
     platform::ThreadId thread() const { return thread_; }
     void set_thread(platform::ThreadId tid) { thread_ = tid; }
 
+    // Stack pool configuration (public for testing)
+    static constexpr int STACK_POOL_SIZE = 8;
+    static constexpr size_t DEFAULT_STACK_SIZE = 8192;
+
     // Stack pool operations
     void* AcquireStack(size_t size = DEFAULT_STACK_SIZE);
     void ReleaseStack(void* stack_top, size_t size);
@@ -89,10 +93,6 @@ public:
 
 private:
     static constexpr int BATCH_SIZE = 8;
-
-    // Stack pool configuration
-    static constexpr int STACK_POOL_SIZE = 8;
-    static constexpr size_t DEFAULT_STACK_SIZE = 8192;
 
     // Handle task after it finishes running
     void HandleTaskAfterRun(TaskMetaBase* task);

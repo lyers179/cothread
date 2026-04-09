@@ -20,6 +20,7 @@ thread_local Worker* Worker::current_worker_ = nullptr;
 
 Worker::Worker(int id) : id_(id) {
     std::memset(&saved_context_, 0, sizeof(saved_context_));
+    std::memset(stack_pool_, 0, sizeof(stack_pool_));
 }
 
 Worker::~Worker() {
@@ -271,6 +272,39 @@ void Worker::WaitForTask() {
 void Worker::WakeUp() {
     wake_count_.fetch_add(1, std::memory_order_release);
     platform::FutexWake(&wake_count_, 1);
+}
+
+void* Worker::AcquireStack(size_t size) {
+    // 1. Try local pool first (only for default size)
+    if (stack_pool_count_ > 0 && size <= DEFAULT_STACK_SIZE) {
+        return stack_pool_[--stack_pool_count_];
+    }
+
+    // 2. Pool empty or wrong size - allocate new via platform API
+    return platform::AllocateStack(size);
+}
+
+void Worker::ReleaseStack(void* stack_top, size_t size) {
+    if (!stack_top) return;
+
+    // 1. Try return to local pool (only default size)
+    if (stack_pool_count_ < STACK_POOL_SIZE && size == DEFAULT_STACK_SIZE) {
+        stack_pool_[stack_pool_count_++] = stack_top;
+        return;
+    }
+
+    // 2. Pool full or wrong size - deallocate
+    platform::DeallocateStack(stack_top, size);
+}
+
+void Worker::DrainStackPool() {
+    for (int i = 0; i < stack_pool_count_; ++i) {
+        if (stack_pool_[i]) {
+            platform::DeallocateStack(stack_pool_[i], DEFAULT_STACK_SIZE);
+            stack_pool_[i] = nullptr;
+        }
+    }
+    stack_pool_count_ = 0;
 }
 
 void Worker::Stop() {

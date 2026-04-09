@@ -90,11 +90,16 @@ TEST_F(StackPoolTest, ReleaseWhenPoolFull) {
 // Test shutdown cleanup
 TEST_F(StackPoolTest, ShutdownCleanup) {
     Worker w(0);
+    void* stacks[Worker::STACK_POOL_SIZE];
 
-    // Acquire and release to fill pool
+    // Acquire all stacks first
     for (int i = 0; i < Worker::STACK_POOL_SIZE; ++i) {
-        void* s = w.AcquireStack();
-        w.ReleaseStack(s, Worker::DEFAULT_STACK_SIZE);
+        stacks[i] = w.AcquireStack();
+    }
+
+    // Release all to fill pool
+    for (int i = 0; i < Worker::STACK_POOL_SIZE; ++i) {
+        w.ReleaseStack(stacks[i], Worker::DEFAULT_STACK_SIZE);
     }
 
     EXPECT_EQ(w.stack_pool_count(), Worker::STACK_POOL_SIZE);
