@@ -60,6 +60,68 @@ TaskMeta* TaskGroup::AllocTaskMeta() {
     return nullptr;
 }
 
+int TaskGroup::AllocMultipleSlots(int32_t* slots, int count) {
+    if (!slots || count <= 0) return 0;
+
+    int allocated = 0;
+
+    // Use CAS loop to atomically grab multiple slots
+    while (allocated < count) {
+        int32_t head = free_head_.load(std::memory_order_acquire);
+        if (head < 0) {
+            // Free list exhausted
+            break;
+        }
+
+        // Walk free list to collect slots
+        int32_t slots_to_claim[16];
+        int32_t current = head;
+        int found = 0;
+
+        while (current >= 0 && found < count && found < 16) {
+            slots_to_claim[found++] = current;
+            current = free_slots_[current].load(std::memory_order_relaxed);
+        }
+
+        if (found == 0) break;
+
+        // Try to claim by updating free_head
+        int32_t new_head = current;
+        if (free_head_.compare_exchange_weak(head, new_head,
+                std::memory_order_acq_rel, std::memory_order_relaxed)) {
+            // Successfully claimed
+            for (int i = 0; i < found && allocated < count; ++i) {
+                slots[allocated++] = slots_to_claim[i];
+            }
+            break;
+        }
+        // CAS failed, retry
+    }
+
+    return allocated;
+}
+
+TaskMeta* TaskGroup::GetOrCreateTaskMeta(int32_t slot) {
+    if (slot < 0 || slot >= static_cast<int32_t>(POOL_SIZE)) {
+        return nullptr;
+    }
+
+    TaskMeta* meta = task_pool_[slot].load(std::memory_order_acquire);
+    if (meta) {
+        // Update slot_index and generation
+        meta->slot_index = slot;
+        meta->generation = generations_[slot].load(std::memory_order_relaxed);
+        return meta;
+    }
+
+    // Need to create new TaskMeta
+    meta = new TaskMeta();
+    meta->slot_index = slot;
+    meta->generation = generations_[slot].load(std::memory_order_relaxed);
+    task_pool_[slot].store(meta, std::memory_order_release);
+    return meta;
+}
+
 void TaskGroup::DeallocTaskMeta(TaskMeta* task) {
     if (!task) return;
 

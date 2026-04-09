@@ -21,11 +21,13 @@ thread_local Worker* Worker::current_worker_ = nullptr;
 Worker::Worker(int id) : id_(id) {
     std::memset(&saved_context_, 0, sizeof(saved_context_));
     std::memset(stack_pool_, 0, sizeof(stack_pool_));
+    std::memset(task_cache_, 0, sizeof(task_cache_));
 }
 
 Worker::~Worker() {
-    // Drain stack pool before destruction
+    // Drain stack pool and task cache before destruction
     DrainStackPool();
+    DrainTaskCache();
 }
 
 Worker* Worker::Current() {
@@ -308,6 +310,57 @@ void Worker::DrainStackPool() {
     stack_pool_count_ = 0;
 }
 
+TaskMeta* Worker::AcquireTaskMeta() {
+    // 1. Try local cache
+    if (task_cache_count_ > 0) {
+        return task_cache_[--task_cache_count_];
+    }
+
+    // 2. Cache empty - refill from TaskGroup
+    RefillTaskCache();
+    if (task_cache_count_ > 0) {
+        return task_cache_[--task_cache_count_];
+    }
+
+    // 3. TaskGroup exhausted - return nullptr
+    return nullptr;
+}
+
+void Worker::ReleaseTaskMeta(TaskMeta* meta) {
+    if (!meta) return;
+
+    // 1. Try return to local cache
+    if (task_cache_count_ < TASK_CACHE_SIZE) {
+        task_cache_[task_cache_count_++] = meta;
+        return;
+    }
+
+    // 2. Cache full - return to TaskGroup
+    GetTaskGroup().DeallocTaskMeta(meta);
+}
+
+void Worker::RefillTaskCache() {
+    int32_t slots[TASK_CACHE_SIZE];
+    int count = GetTaskGroup().AllocMultipleSlots(slots, TASK_CACHE_SIZE);
+
+    for (int i = 0; i < count; ++i) {
+        TaskMeta* meta = GetTaskGroup().GetOrCreateTaskMeta(slots[i]);
+        if (meta) {
+            task_cache_[task_cache_count_++] = meta;
+        }
+    }
+}
+
+void Worker::DrainTaskCache() {
+    for (int i = 0; i < task_cache_count_; ++i) {
+        if (task_cache_[i]) {
+            GetTaskGroup().DeallocTaskMeta(task_cache_[i]);
+            task_cache_[i] = nullptr;
+        }
+    }
+    task_cache_count_ = 0;
+}
+
 void Worker::Stop() {
     stop_flag_.store(1, std::memory_order_seq_cst);
     wake_count_.fetch_add(1, std::memory_order_seq_cst);
@@ -356,9 +409,9 @@ void Worker::HandleFinishedBthread(TaskMeta* task) {
         task->stack_size = 0;
     }
 
-    // Release reference
+    // Release reference - return to cache if ref count reaches 0
     if (task->Release()) {
-        GetTaskGroup().DeallocTaskMeta(task);
+        ReleaseTaskMeta(task);
     }
 }
 

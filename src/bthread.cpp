@@ -50,8 +50,15 @@ int bthread_create(bthread_t* tid, const bthread_attr_t* attr,
 
     Scheduler::Instance().Init();
 
-    // Allocate TaskMeta
-    TaskMeta* task = GetTaskGroup().AllocTaskMeta();
+    // Allocate TaskMeta - use worker's cache if available
+    TaskMeta* task = nullptr;
+    Worker* w = Worker::Current();
+    if (w) {
+        task = w->AcquireTaskMeta();
+    }
+    if (!task) {
+        task = GetTaskGroup().AllocTaskMeta();
+    }
     if (!task) return EAGAIN;
 
     // Set up stack - use worker's pool if available

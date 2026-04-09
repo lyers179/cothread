@@ -41,5 +41,10 @@ add_executable(stack_pool_test stack_pool_test.cpp)
 target_link_libraries(stack_pool_test bthread gtest gtest_main)
 add_test(NAME StackPoolTest COMMAND stack_pool_test)
 
+# Task cache test (requires gtest)
+add_executable(task_cache_test task_cache_test.cpp)
+target_link_libraries(task_cache_test bthread gtest gtest_main)
+add_test(NAME TaskCacheTest COMMAND task_cache_test)
+
 # Performance tests (requires gtest and benchmark)
 add_subdirectory(perf)
