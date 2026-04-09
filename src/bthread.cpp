@@ -84,7 +84,8 @@ int bthread_create(bthread_t* tid, const bthread_attr_t* attr,
     task->state.store(TaskState::READY, std::memory_order_relaxed);
     task->ref_count.store(2, std::memory_order_relaxed);  // Creator + joinable
     task->join_waiters.store(0, std::memory_order_relaxed);
-    task->join_butex = new Butex();
+    // Lazy Butex allocation - will be created on first join
+    task->join_butex = nullptr;
 
     // Set up context
     MakeContext(&task->context, task->stack, task->stack_size,
@@ -113,7 +114,17 @@ int bthread_join(bthread_t tid, void** retval) {
         }
     }
 
-    // Capture generation BEFORE checking state to avoid race condition
+    // Lazy Butex allocation with atomic CAS
+    if (task->join_butex == nullptr) {
+        Butex* new_butex = new Butex();
+        void* expected = nullptr;
+        if (!__atomic_compare_exchange_n(&task->join_butex, &expected, new_butex,
+                false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) {
+            // Another joiner already created it
+            delete new_butex;
+        }
+    }
+
     Butex* join_butex = static_cast<Butex*>(task->join_butex);
     int generation = join_butex->value();
 
@@ -121,7 +132,12 @@ int bthread_join(bthread_t tid, void** retval) {
     if (task->state.load(std::memory_order_acquire) == TaskState::FINISHED) {
         if (retval) *retval = task->result;
         if (task->Release()) {
-            GetTaskGroup().DeallocTaskMeta(task);
+            Worker* w = Worker::Current();
+            if (w) {
+                w->ReleaseTaskMeta(task);
+            } else {
+                GetTaskGroup().DeallocTaskMeta(task);
+            }
         }
         return 0;
     }
@@ -133,7 +149,12 @@ int bthread_join(bthread_t tid, void** retval) {
 
     if (retval) *retval = task->result;
     if (task->Release()) {
-        GetTaskGroup().DeallocTaskMeta(task);
+        Worker* w = Worker::Current();
+        if (w) {
+            w->ReleaseTaskMeta(task);
+        } else {
+            GetTaskGroup().DeallocTaskMeta(task);
+        }
     }
 
     return 0;
