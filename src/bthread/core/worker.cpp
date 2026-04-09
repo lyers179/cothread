@@ -348,6 +348,13 @@ void Worker::HandleFinishedBthread(TaskMeta* task) {
         Scheduler::Instance().WakeButex(task->join_butex, INT_MAX);
     }
 
+    // Release stack to pool
+    if (task->stack) {
+        ReleaseStack(task->stack, task->stack_size);
+        task->stack = nullptr;
+        task->stack_size = 0;
+    }
+
     // Release reference
     if (task->Release()) {
         GetTaskGroup().DeallocTaskMeta(task);
