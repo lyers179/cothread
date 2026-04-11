@@ -12,6 +12,55 @@
 #include <functional>  // for std::hash
 #include <thread>      // for std::this_thread
 
+// Enable tracing for debugging
+#define FUTEX_TRACE 0
+#ifdef FUTEX_TRACE
+#include <chrono>
+
+namespace bthread {
+
+struct TraceEntry {
+    int thread_id;
+    int event_type;
+    int wake_count;
+    int wake_pending;
+    int is_idle;
+    uint64_t timestamp;
+};
+static constexpr int MAX_TRACE = 10000;
+static std::atomic<int> trace_idx{0};
+static TraceEntry trace_buffer[MAX_TRACE];
+
+static void Trace(int thread_id, int event_type, int wake_count, int wake_pending, int is_idle) {
+    int idx = trace_idx.fetch_add(1);
+    if (idx < MAX_TRACE) {
+        trace_buffer[idx] = {
+            thread_id, event_type, wake_count, wake_pending, is_idle,
+            std::chrono::high_resolution_clock::now().time_since_epoch().count()
+        };
+    }
+}
+
+void PrintFutexTrace() {
+    fprintf(stderr, "\n=== Futex Trace Log ===\n");
+    for (int i = 0; i < trace_idx.load() && i < MAX_TRACE; ++i) {
+        auto& e = trace_buffer[i];
+        const char* event_names[] = {"", "WAIT_START", "WAIT_CHECK", "FUTEX_WAIT", "FUTEX_RET", "WAKE_START", "WAKE_END"};
+        fprintf(stderr, "[%05ld] T%d %s: wc=%d, wp=%d, idle=%d\n",
+                static_cast<long>(e.timestamp % 100000000), e.thread_id, event_names[e.event_type],
+                e.wake_count, e.wake_pending, e.is_idle);
+    }
+}
+
+} // namespace bthread
+
+#else
+namespace bthread {
+static void Trace(int, int, int, int, int) {}
+void PrintFutexTrace() {}
+} // namespace bthread
+#endif
+
 namespace bthread {
 
 using namespace platform;
@@ -37,6 +86,9 @@ Worker* Worker::Current() {
 
 void Worker::Run() {
     current_worker_ = this;
+
+    // Signal that this worker is ready
+    Scheduler::Instance().WorkerReady();
 
     int task_count = 0;
     while (!IsStopped()) {
@@ -258,11 +310,33 @@ void Worker::WaitForTask() {
         }
 
         // Spin complete, enter futex wait
-        // Set idle flag before waiting so WakeUp can skip unnecessary futex calls
-        is_idle_.store(true, std::memory_order_release);
+        Trace(id_, 1, wake_count_.load(), wake_pending_.load(), is_idle_.load());
 
-        int expected = wake_count_.load(std::memory_order_acquire);
+        is_idle_.store(true, std::memory_order_seq_cst);
+
+        // Capture current generation with seq_cst
+        int expected = wake_count_.load(std::memory_order_seq_cst);
+
+        Trace(id_, 2, expected, wake_pending_.load(), 1);
+
+        // Re-check queue after setting is_idle_ - catches concurrent task submission
+        // Also check wake_pending_ - catches WakeUp that didn't see our is_idle_
+        if (!local_queue_.Empty() ||
+            !Scheduler::Instance().global_queue().Empty() ||
+            wake_pending_.load(std::memory_order_seq_cst)) {
+            is_idle_.store(false, std::memory_order_release);
+            spin_count = 0;
+            continue;
+        }
+
+        Trace(id_, 3, expected, wake_pending_.load(), 1);
+
+        // Now wait for either:
+        // - wake_count to change (WakeUp incremented it)
+        // - FutexWake signal from WakeUp
         int result = platform::FutexWait(&wake_count_, expected, &ts);
+
+        Trace(id_, 4, wake_count_.load(), wake_pending_.load(), 0);
 
         // Clear idle flag after waking
         is_idle_.store(false, std::memory_order_release);
@@ -279,13 +353,30 @@ void Worker::WaitForTask() {
 }
 
 void Worker::WakeUp() {
-    // Only do futex wake if worker is actually idle
-    // This avoids unnecessary syscalls when worker is running
-    if (!is_idle_.load(std::memory_order_acquire)) {
-        return;
-    }
-    wake_count_.fetch_add(1, std::memory_order_release);
+    Trace(id_, 5, wake_count_.load(), wake_pending_.load(), is_idle_.load());
+
+    // Set wake_pending_ first to prevent missed-wake race
+    // If waiter checks is_idle_ before we set wake_pending_, they will see
+    // wake_pending_ = true and skip FutexWait
+    wake_pending_.store(true, std::memory_order_seq_cst);
+
+    // Increment wake_count (the generation counter)
+    wake_count_.fetch_add(1, std::memory_order_seq_cst);
+
+    // ALWAYS call FutexWake, even if is_idle_ is false.
+    // This handles the race where:
+    // 1. Worker is about to go idle (has set is_idle_=true)
+    // 2. WakeUp checks is_idle_ and sees false (race)
+    // 3. Worker enters FutexWait
+    // 4. WakeUp doesn't call FutexWake -> missed wake!
+    //
+    // The cost of an extra FutexWake is minimal (it's a no-op if no waiters).
     platform::FutexWake(&wake_count_, 1);
+
+    Trace(id_, 6, wake_count_.load(), 1, is_idle_.load());
+
+    // Clear wake_pending_ after potentially waking
+    wake_pending_.store(false, std::memory_order_release);
 }
 
 void* Worker::AcquireStack(size_t size) {

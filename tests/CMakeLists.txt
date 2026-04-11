@@ -51,5 +51,8 @@ add_executable(butex_lazy_test butex_lazy_test.cpp)
 target_link_libraries(butex_lazy_test bthread gtest gtest_main pthread)
 add_test(NAME ButexLazyTest COMMAND butex_lazy_test)
 
+# Sync tests
+add_subdirectory(sync)
+
 # Performance tests (requires gtest and benchmark)
 add_subdirectory(perf)

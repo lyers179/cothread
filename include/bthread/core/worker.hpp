@@ -21,6 +21,9 @@ struct CoroutineMeta;
 
 namespace bthread {
 
+// Debug function to print futex trace (defined in worker.cpp)
+void PrintFutexTrace();
+
 /**
  * @brief Worker represents a pthread worker thread that executes both bthread and coroutine tasks.
  *
@@ -77,6 +80,11 @@ public:
     const WorkStealingQueue& local_queue() const { return local_queue_; }
     platform::ThreadId thread() const { return thread_; }
     void set_thread(platform::ThreadId tid) { thread_ = tid; }
+
+    // Idle state accessor for WakeIdleWorkers
+    bool is_idle() const {
+        return is_idle_.load(std::memory_order_acquire);
+    }
 
     // Stack pool configuration (public for testing)
     static constexpr int STACK_POOL_SIZE = 8;
@@ -138,8 +146,12 @@ private:
     std::atomic<int> stop_flag_{0};
 
     // Wake counter - increments on each WakeUp, also increments on Stop
-    // WaitOnAddress on this counter handles races inherently
+    // This is the futex wait target - waiter waits for this value to change
     std::atomic<int> wake_count_{0};
+
+    // Wake pending flag - set by WakeUp before checking is_idle_
+    // This prevents the race where WakeUp misses the waiter
+    std::atomic<bool> wake_pending_{false};
 
     // Idle flag - true when worker is waiting in futex
     std::atomic<bool> is_idle_{false};

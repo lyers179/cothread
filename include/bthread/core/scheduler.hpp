@@ -101,6 +101,9 @@ public:
     /// Wake idle workers
     void WakeIdleWorkers(int count);
 
+    /// Called by worker when it's ready (has entered Run loop)
+    void WorkerReady();
+
     // ========== Unified Task Submission ==========
 
     /**
@@ -159,6 +162,11 @@ private:
     std::atomic<Worker*> workers_atomic_[MAX_WORKERS];
     std::atomic<int32_t> worker_count_{0};
     int32_t configured_count_{0};
+
+    // Worker ready synchronization
+    std::atomic<int32_t> workers_ready_{0};
+    std::mutex workers_ready_mutex_;
+    std::condition_variable workers_ready_cv_;
 
     GlobalQueue global_queue_;
 

@@ -11,7 +11,11 @@
 
 namespace bthread {
 
-Scheduler::Scheduler() {}
+Scheduler::Scheduler() {
+    // Ensure TaskGroup is constructed BEFORE Scheduler so it's destroyed AFTER
+    // This is critical because Scheduler's destructor calls GetTaskGroup()
+    (void)GetTaskGroup();
+}
 
 Scheduler::~Scheduler() {
     Shutdown();
@@ -38,6 +42,15 @@ void Scheduler::Init() {
 
         StartWorkers(n);
         GetTaskGroup().set_worker_count(n);
+
+        // Wait for all workers to be ready before returning
+        {
+            std::unique_lock<std::mutex> lock(workers_ready_mutex_);
+            workers_ready_cv_.wait(lock, [this, n] {
+                return workers_ready_.load(std::memory_order_acquire) >= n;
+            });
+        }
+
         initialized_.store(true, std::memory_order_release);
     });
 }
@@ -240,15 +253,26 @@ void Scheduler::WakeButex(void* butex, int count) {
 void Scheduler::WakeIdleWorkers(int count) {
     // Use atomic array for lock-free wake - avoids mutex contention
     int wc = worker_count_.load(std::memory_order_acquire);
-    int woken = 0;
 
-    for (int i = 0; i < wc && woken < count; ++i) {
+    // Wake ALL workers - each WakeUp increments wake_count_
+    // This ensures that any worker about to sleep will see the incremented value
+    // and return from FutexWait with EAGAIN.
+    //
+    // Note: Waking all workers might seem inefficient, but it's necessary for correctness.
+    // Each WakeUp is cheap (atomic increment + conditional syscall).
+    for (int i = 0; i < wc; ++i) {
         Worker* w = workers_atomic_[i].load(std::memory_order_acquire);
         if (w) {
             w->WakeUp();
-            ++woken;
         }
     }
+}
+
+void Scheduler::WorkerReady() {
+    int prev = workers_ready_.fetch_add(1, std::memory_order_acq_rel);
+    // Notify on every increment (simple but slightly inefficient)
+    // Could optimize to only notify when reaching expected count
+    workers_ready_cv_.notify_one();
 }
 
 } // namespace bthread
