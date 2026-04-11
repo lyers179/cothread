@@ -10,19 +10,19 @@ struct TaskMeta;
 struct ButexWaiterNode;
 
 /**
- * @brief Lock-free MPSC queue for butex waiters.
+ * @brief Lock-free MPMC queue for butex waiters.
  *
- * This class implements a lock-free multiple-producer single-consumer queue
+ * This class implements a lock-free multiple-producer multiple-consumer queue
  * for managing waiting tasks in synchronization primitives.
  *
  * The queue supports:
  * - AddToTail: FIFO ordering (multiple producers)
  * - AddToHead: LIFO ordering (for re-queueing)
- * - PopFromHead: Consumer operation
+ * - PopFromHead: MPMC consumer operation (CAS retry)
  *
  * Thread safety:
- * - AddToTail/AddToHead can be called from multiple threads concurrently
- * - PopFromHead must be called from a single thread (or with external synchronization)
+ * - AddToTail/AddToHead can be called from multiple threads concurrently (MPMC)
+ * - PopFromHead can be called from multiple threads concurrently (MPMC)
  */
 class ButexQueue {
 public:
