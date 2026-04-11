@@ -156,7 +156,11 @@ TaskMeta* ButexQueue::PopFromHead() {
                     ButexWaiterNode* expected_head = head;
                     if (head_.compare_exchange_strong(expected_head, nullptr,
                             std::memory_order_acq_rel, std::memory_order_relaxed)) {
-                        tail_.store(nullptr, std::memory_order_release);
+                        // Use CAS for tail update to avoid race with AddToTail
+                        // which may have set tail to a new node after our head CAS
+                        ButexWaiterNode* expected_tail = head;
+                        tail_.compare_exchange_strong(expected_tail, nullptr,
+                            std::memory_order_acq_rel, std::memory_order_relaxed);
                     }
                 }
                 // Brief pause before retry
