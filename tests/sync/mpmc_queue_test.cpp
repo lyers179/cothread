@@ -329,12 +329,61 @@ void test_execution_queue_concurrent() {
     printf("  PASSED: All tasks submitted and executed correctly\n");
 }
 
+void test_pop_no_timeout_when_nonempty() {
+    printf("\nTest: Pop No Timeout When Queue Nonempty\n");
+
+    // This test verifies that PopFromHead does not return nullptr when nodes exist
+    // or are being added to the queue. The bug was: timeout returns nullptr even
+    // when queue has nodes, causing Wake to miss waiters.
+
+    ButexQueue queue;
+    std::atomic<bool> pop_started{false};
+    std::atomic<bool> node_added{false};
+    std::atomic<TaskMeta*> popped{nullptr};
+
+    TaskMeta task;
+    task.is_waiting.store(true, std::memory_order_relaxed);
+    task.butex_waiter_node.claimed.store(false, std::memory_order_relaxed);
+    task.butex_waiter_node.next.store(nullptr, std::memory_order_relaxed);
+
+    std::thread popper([&] {
+        pop_started.store(true);
+        // Wait until node is added to queue
+        while (!node_added.load()) {
+            std::this_thread::yield();
+        }
+        // PopFromHead should return the task, not nullptr
+        TaskMeta* result = queue.PopFromHead();
+        popped.store(result);
+    });
+
+    // Wait for popper thread to start
+    while (!pop_started.load()) {
+        std::this_thread::yield();
+    }
+
+    // Small delay to ensure popper is running
+    usleep(1000);  // 1ms
+
+    // Add task to queue
+    queue.AddToTail(&task);
+    node_added.store(true);
+
+    popper.join();
+
+    TaskMeta* result = popped.load();
+    printf("  Expected task ptr: %p, Got: %p\n", (void*)&task, (void*)result);
+    assert(result == &task && "PopFromHead should not return nullptr when queue has nodes");
+    printf("  PASSED: PopFromHead returns task when queue nonempty\n");
+}
+
 int main() {
     printf("Testing MPMC Queue PopFromHead Implementation...\n\n");
 
     test_mpmc_concurrent_pop();
     test_mpmc_interleaved_push_pop();
     test_mpmc_no_double_pop();
+    test_pop_no_timeout_when_nonempty();
     test_butex_concurrent_wake();
     test_execution_queue_concurrent();
 
