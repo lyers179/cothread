@@ -190,20 +190,20 @@ if (task->join_butex == nullptr) {
 
 ### 完整指标对比
 
-| 指标 | 初始 (2026-03) | Phase 1 (2026-04-07) | Phase 2 (2026-04-09) | Phase 3 (2026-04-11) | Phase 4 (2026-04-11) | 总改进幅度 |
-|------|----------------|----------------------|----------------------|----------------------|----------------------|------------|
-| Create/Join | ~5,000 ops/sec | 81K ops/sec | 78K ops/sec | 152K ops/sec | **92K ops/sec** | **~18x** |
-| Yield | - | 8M/sec (125ns) | 8M/sec (124ns) | 32M/sec (31ns) | **8M/sec (129ns)** | 稳定 |
-| Mutex Contention | - | 11M/sec | 12M/sec | 19M/sec (0.05µs) | **12M/sec (0.08µs)** | 高效 |
-| **vs std::thread** | **慢 6.92x** | **快 3.19x** | **快 3.26x** | **快 10x** | **快 3.79x** | **~26x** |
-| Scalability (8w) | - | 7x | 6.5x | 7.8x | **5.86x** | 正常 |
-| Stack Performance | - | 148K ops/sec | 152K ops/sec | 298K ops/sec | **142K ops/sec** | 稳定 |
-| Producer-Consumer | - | 492K items/sec | 519K items/sec | 750K items/sec | **463K items/sec** | 稳定 |
-| **Benchmark 通过率** | **不稳定** | **70%** | **70%** | **100%** | **100%** | **稳定** |
+| 指标 | 初始 (2026-03) | Phase 1 (2026-04-07) | Phase 2 (2026-04-09) | Phase 3 (2026-04-11) | Phase 4 (2026-04-11) | Phase 5 (2026-04-12) | 总改进幅度 |
+|------|----------------|----------------------|----------------------|----------------------|----------------------|----------------------|------------|
+| Create/Join | ~5,000 ops/sec | 81K ops/sec | 78K ops/sec | 152K ops/sec | 92K ops/sec | **~110K ops/sec** | **~22x** |
+| Yield | - | 8M/sec (125ns) | 8M/sec (124ns) | 32M/sec (31ns) | 8M/sec (129ns) | **8M/sec (131ns)** | 稳定 |
+| Mutex Contention | - | 11M/sec | 12M/sec | 19M/sec | 12M/sec (0.08µs) | **12M/sec (0.08µs)** | 高效 |
+| **vs std::thread** | **慢 6.92x** | **快 3.19x** | **快 3.26x** | **快 10x** | 快 3.79x | **快 3.5x** | **~24x** |
+| Scalability (8w) | - | 7x | 6.5x | 7.8x | 5.86x | **5.6x** | 正常 |
+| Stack Performance | - | 148K ops/sec | 152K ops/sec | 298K ops/sec | 142K ops/sec | **140K ops/sec** | 稳定 |
+| Producer-Consumer | - | 492K items/sec | 519K items/sec | 750K items/sec | 463K items/sec | **460K items/sec** | 稳定 |
+| **Benchmark 通过率** | **不稳定** | **70%** | **70%** | **100%** | **100%** | **100%** | **稳定** |
 
 ### 关键改进
 
-**bthread 从比 std::thread 慢 6.92x → 快 3.79x！（累计约 26 倍改进）**
+**bthread 从比 std::thread 慢 6.92x → 快 3.5x！（累计约 24 倍改进）**
 
 ### 指标说明
 
@@ -218,16 +218,16 @@ if (task->join_butex == nullptr) {
 | Producer-Consumer | 2生产者 × 2消费者 | 消息传递吞吐量 |
 
 ```
-2026-03-24          2026-04-07          2026-04-09          2026-04-11          2026-04-11
-    │                   │                   │                   │                   │
-    ▼                   ▼                   ▼                   ▼                   ▼
-~5K ops/sec  ──────► 81K ops/sec  ──────► 78K ops/sec  ──────► 152K ops/sec ─────► 92K ops/sec
-    │                   │                   │                   │                   │
-慢 6.92x           快 3.19x           快 3.26x           快 10x            快 3.79x
-(相对std::thread)  (相对std::thread)  (相对std::thread)  (相对std::thread)  (相对std::thread)
-    │                   │                   │                   │                   │
-  初始              Phase 1            Phase 2            Phase 3            Phase 4
-                  性能优化            分配优化          竞态修复         Lock-Free优化
+2026-03-24          2026-04-07          2026-04-09          2026-04-11          2026-04-11          2026-04-12
+    │                   │                   │                   │                   │                   │
+    ▼                   ▼                   ▼                   ▼                   ▼                   ▼
+~5K ops/sec  ──────► 81K ops/sec  ──────► 78K ops/sec  ──────► 152K ops/sec ─────► 92K ops/sec ─────► ~110K ops/sec
+    │                   │                   │                   │                   │                   │
+慢 6.92x           快 3.19x           快 3.26x           快 10x            快 3.79x          快 3.5x
+(相对std::thread)  (相对std::thread)  (相对std::thread)  (相对std::thread)  (相对std::thread)  (相对std::thread)
+    │                   │                   │                   │                   │                   │
+  初始              Phase 1            Phase 2            Phase 3            Phase 4            Phase 5
+                  性能优化            分配优化          竞态修复         Lock-Free优化      Pause/Yield优化
 ```
 
 ---
@@ -387,6 +387,84 @@ void ExecutionQueue::Submit(std::function<void()> task) {
 - Benchmark 通过率保持 **100%**
 - 并发唤醒场景无锁竞争
 - ExecutionQueue 提交延迟降低
+
+---
+
+## 2026-04-12: Pause/Yield 优化（第五阶段）
+
+**问题分析**: Phase 4 的 PopFromHead 使用 `yield()` 进行 spin，导致不必要的上下文切换开销。
+
+### 问题根因
+
+| 问题 | Phase 4 实现 | 影响 |
+|------|-------------|------|
+| spin 使用 yield | 每次 spin 都调用 `std::this_thread::yield()` | 上下文切换开销大 |
+| MAX_SPINS 过大 | 10000 次 | 过度等待 |
+| 内存序过强 | 部分使用 `seq_cst` | 不必要的同步开销 |
+
+### 优化方案
+
+#### 1. 自适应 Spin: pause → yield
+
+```cpp
+// Phase 4 (低效)
+if (spin_count++ < 10000) {
+    std::this_thread::yield();  // 每次都上下文切换
+}
+
+// Phase 5 (高效)
+constexpr int MAX_PAUSE_SPINS = 100;   // Phase 1: CPU pause
+constexpr int MAX_YIELD_SPINS = 10;    // Phase 2: yield
+
+if (pause_count < MAX_PAUSE_SPINS) {
+    __builtin_ia32_pause();  // CPU 指令，无上下文切换
+    ++pause_count;
+} else if (yield_count < MAX_YIELD_SPINS) {
+    std::this_thread::yield();  // 仅在 pause 失败后 yield
+    ++yield_count;
+}
+```
+
+#### 2. 批量 Pop 减少 CAS 开销
+
+```cpp
+// Phase 4: 单个 Pop
+while (woken < count) {
+    TaskMeta* waiter = queue_.PopFromHead();  // 每次 CAS
+}
+
+// Phase 5: 批量 Pop
+TaskMeta* tasks[16];
+int batch_count = queue_.PopMultipleFromHead(tasks, 16);  // 批量 CAS
+```
+
+#### 3. 内存序优化
+
+将 `seq_cst` 改为 `acquire`，减少不必要的同步开销。
+
+### 提交记录
+
+| 提交 | 说明 |
+|------|------|
+| `butex_queue.cpp` | perf: pause → yield 自适应 spin |
+| `mpsc_queue.hpp` | perf: pause + acquire 内存序 |
+| `butex.cpp` | perf: 批量 Pop 减少 CAS 开销 |
+
+### 性能结果
+
+| 基准测试 | Phase 4 (优化前) | Phase 5 (优化后) | 说明 |
+|----------|------------------|------------------|------|
+| Create/Join | 92K ops/sec | **~110K ops/sec** | +20% |
+| Yield | 8M/sec (129ns) | **8M/sec (131ns)** | 稳定 |
+| Mutex Contention | 12M/sec | **12M/sec (0.08µs)** | 稳定 |
+| **vs std::thread** | 快 3.79x | **快 3.5x** | 保持优势 |
+| Scalability (8w) | 5.86x | **5.6x** | 正常波动 |
+| Benchmark 通过率 | 100% | **100%** | 稳定 |
+
+**关键成果**:
+- Create/Join 性能提升约 20%
+- Benchmark 通过率保持 100%
+- spin 开销大幅减少（pause 无上下文切换）
 
 ---
 

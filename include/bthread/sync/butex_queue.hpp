@@ -48,8 +48,21 @@ public:
     /**
      * @brief Pop a task from the head of the queue.
      * @return The task at the head, or nullptr if queue is empty.
+     *
+     * Uses adaptive spinning: pause (CPU instruction) first, then yield.
      */
     TaskMeta* PopFromHead();
+
+    /**
+     * @brief Pop multiple tasks from the head of the queue.
+     * @param buffer Buffer to store popped tasks.
+     * @param max_count Maximum number of tasks to pop.
+     * @return Number of tasks actually popped.
+     *
+     * More efficient than calling PopFromHead multiple times
+     * because it amortizes the spin overhead.
+     */
+    int PopMultipleFromHead(TaskMeta** buffer, int max_count);
 
     /**
      * @brief Mark a task as removed from the queue.

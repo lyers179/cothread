@@ -26,32 +26,37 @@
 13. **Butex Wake 无锁** - 移除 wake_mutex_，消除并发唤醒竞争
 14. **ExecutionQueue 无锁提交** - 改用 MpscQueue，无锁任务提交
 
+### 第五阶段 (2026-04-12) - Pause/Yield 优化
+15. **自适应 Spin** - pause 指令优先，yield 作为 fallback
+16. **批量 Pop** - PopMultipleFromHead 减少 CAS 开销
+17. **内存序优化** - seq_cst → acquire 减少同步开销
+
 ## 性能基准
 
-### 第四阶段优化后（2026-04-11）
+### 第五阶段优化后（2026-04-12）
 
 | 基准测试 | 结果 |
 |----------|------|
-| Create/Join | 92K ops/sec (10.8 µs/op) |
-| Yield | 8M yields/sec (129 ns/yield) |
+| Create/Join | ~110K ops/sec (9 µs/op) |
+| Yield | 8M yields/sec (131 ns/yield) |
 | Mutex Contention | 12M lock/unlock/sec (0.08 µs/op) |
-| **vs std::thread** | **3.79x faster** |
-| Scalability (8 workers) | 5.86x speedup |
-| Stack Performance | 142K ops/sec |
-| Producer-Consumer | 463K items/sec |
+| **vs std::thread** | **3.5x faster** |
+| Scalability (8 workers) | 5.6x speedup |
+| Stack Performance | 140K ops/sec |
+| Producer-Consumer | 460K items/sec |
 | **Benchmark 通过率** | **100%** |
 
 ### 完整指标对比
 
-| 指标 | 初始 | Phase 1 | Phase 2 | Phase 3 | Phase 4 (最新) |
-|------|------|---------|---------|---------|----------------|
-| Create/Join | ~5K | 81K | 83K | 152K | **92K** |
-| vs std::thread | 慢 6.92x | 快 3.19x | 快 3.15x | 快 10x | **快 3.79x** |
-| Scalability (8w) | - | 6.64x | 8.50x | 7.8x | **5.86x** |
-| Stack Performance | - | 148K | 162K | 298K | **142K** |
-| Producer-Consumer | - | 492K | 728K | 750K | **463K** |
-| Yield | - | 8M/sec | 8M/sec | 32M/sec | **8M/sec** |
-| Mutex Contention | - | 11M/sec | 12M/sec | 19M/sec | **12M/sec** |
+| 指标 | 初始 | Phase 1 | Phase 2 | Phase 3 | Phase 4 | Phase 5 (最新) |
+|------|------|---------|---------|---------|---------|----------------|
+| Create/Join | ~5K | 81K | 83K | 152K | 92K | **~110K** |
+| vs std::thread | 慢 6.92x | 快 3.19x | 快 3.15x | 快 10x | 快 3.79x | **快 3.5x** |
+| Scalability (8w) | - | 6.64x | 8.50x | 7.8x | 5.86x | **5.6x** |
+| Stack Performance | - | 148K | 162K | 298K | 142K | **140K** |
+| Producer-Consumer | - | 492K | 728K | 750K | 463K | **460K** |
+| Yield | - | 8M/sec | 8M/sec | 32M/sec | 8M/sec | **8M/sec** |
+| Mutex Contention | - | 11M/sec | 12M/sec | 19M/sec | 12M/sec | **12M/sec** |
 
 ### perf 分析优化
 

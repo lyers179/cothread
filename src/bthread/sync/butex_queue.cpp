@@ -101,31 +101,53 @@ void ButexQueue::AddToHead(TaskMeta* task) {
     }
 }
 
+// Platform-specific pause instruction for spin loops
+#if defined(__x86_64__) || defined(__i386__)
+    #define BTHREAD_PAUSE() __builtin_ia32_pause()
+#elif defined(__aarch64__)
+    #define BTHREAD_PAUSE() asm volatile("isb" ::: "memory")
+#else
+    #define BTHREAD_PAUSE() do {} while(0)  // compiler barrier fallback
+#endif
+
 TaskMeta* ButexQueue::PopFromHead() {
-    int spin_count = 0;
-    constexpr int MAX_SPINS = 10000;
+    // Adaptive spinning thresholds
+    constexpr int MAX_PAUSE_SPINS = 100;   // Phase 1: CPU pause (~3-10 us)
+    constexpr int MAX_YIELD_SPINS = 10;    // Phase 2: yield (~1-10 ms)
+
+    int pause_count = 0;
+    int yield_count = 0;
+
     while (true) {
         // Load head with acquire
         ButexWaiterNode* head = head_.load(std::memory_order_acquire);
+
+        // Empty queue check
         if (!head) {
-            // Check if tail is non-null - there might be a node being added
             ButexWaiterNode* tail = tail_.load(std::memory_order_acquire);
-            if (tail && tail != head) {
-                // Node being added, spin briefly
-                if (spin_count++ < MAX_SPINS) {
-                    std::this_thread::yield();
-                    continue;
-                }
-                // Timeout: tail set but head not set after many spins
-                // This indicates a stuck state - return nullptr to avoid deadlock
-                return nullptr;
+            if (!tail) {
+                return nullptr;  // Truly empty
             }
+            // tail != null but head == null: node being added
+            // Use adaptive spin
+            if (pause_count < MAX_PAUSE_SPINS) {
+                BTHREAD_PAUSE();
+                ++pause_count;
+                continue;
+            }
+            if (yield_count < MAX_YIELD_SPINS) {
+                std::this_thread::yield();
+                ++yield_count;
+                pause_count = 0;  // Reset pause after yield
+                continue;
+            }
+            // Timeout after both phases
             return nullptr;
         }
 
-        // Try to claim this node
+        // Try to claim this node first (ABA prevention)
         if (head->claimed.exchange(true, std::memory_order_acq_rel)) {
-            // Already claimed, try to skip to next
+            // Already claimed by another consumer, try to skip
             ButexWaiterNode* next = head->next.load(std::memory_order_acquire);
             if (next) {
                 // Try to advance head past this claimed node
@@ -133,45 +155,44 @@ TaskMeta* ButexQueue::PopFromHead() {
                 head_.compare_exchange_weak(expected, next,
                     std::memory_order_acq_rel, std::memory_order_relaxed);
             } else {
-                // No next, and head is claimed - check if queue is truly empty
+                // No next, check if queue is truly empty
                 ButexWaiterNode* tail = tail_.load(std::memory_order_acquire);
                 if (tail == head) {
-                    // Queue is empty (head and tail both point to claimed node with no next)
-                    // Try to reset both to nullptr
+                    // Queue is empty (head and tail both point to claimed node)
                     ButexWaiterNode* expected_head = head;
                     if (head_.compare_exchange_strong(expected_head, nullptr,
                             std::memory_order_acq_rel, std::memory_order_relaxed)) {
                         tail_.store(nullptr, std::memory_order_release);
                     }
                 }
-                if (spin_count++ >= MAX_SPINS) {
-                    // Timeout waiting for next or queue reset
-                    return nullptr;
-                }
+                // Brief pause before retry
+                BTHREAD_PAUSE();
             }
             continue;
         }
 
-        // Load next with acquire to synchronize with AddToTail's release store
+        // Successfully claimed, load next
         ButexWaiterNode* next = head->next.load(std::memory_order_acquire);
 
         // If next is null but tail != head, a node is being added
         if (!next) {
             ButexWaiterNode* tail = tail_.load(std::memory_order_acquire);
             if (tail != head) {
-                // Node being added, spin and retry
+                // Node being added, release claim and spin
                 head->claimed.store(false, std::memory_order_relaxed);
-                if (spin_count++ < MAX_SPINS) {
-                    std::this_thread::yield();
+                if (pause_count < MAX_PAUSE_SPINS) {
+                    BTHREAD_PAUSE();
+                    ++pause_count;
                 } else {
-                    // Timeout: return nullptr to avoid deadlock
-                    return nullptr;
+                    std::this_thread::yield();
+                    ++yield_count;
+                    pause_count = 0;
                 }
                 continue;
             }
         }
 
-        // Try to advance head - acq_rel provides synchronization for accessing head->task
+        // Try to advance head
         ButexWaiterNode* expected = head;
         if (head_.compare_exchange_strong(expected, next,
                 std::memory_order_acq_rel, std::memory_order_relaxed)) {
@@ -180,13 +201,20 @@ TaskMeta* ButexQueue::PopFromHead() {
                 reinterpret_cast<char*>(head) - offsetof(TaskMeta, butex_waiter_node));
         }
 
-        // CAS failed, reset claimed and retry
+        // CAS failed (rare), release claim and retry
         head->claimed.store(false, std::memory_order_relaxed);
-        if (spin_count++ >= MAX_SPINS) {
-            // Too many retries, return nullptr
-            return nullptr;
-        }
+        BTHREAD_PAUSE();
     }
+}
+
+int ButexQueue::PopMultipleFromHead(TaskMeta** buffer, int max_count) {
+    int count = 0;
+    while (count < max_count) {
+        TaskMeta* task = PopFromHead();
+        if (!task) break;
+        buffer[count++] = task;
+    }
+    return count;
 }
 
 void ButexQueue::RemoveFromWaitQueue(TaskMeta* task) {

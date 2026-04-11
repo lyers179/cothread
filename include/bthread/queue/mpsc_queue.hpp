@@ -5,6 +5,15 @@
 #include <thread>
 #include "bthread/core/task_meta_base.hpp"
 
+// Platform-specific pause instruction for spin loops
+#if defined(__x86_64__) || defined(__i386__)
+    #define BTHREAD_QUEUE_PAUSE() __builtin_ia32_pause()
+#elif defined(__aarch64__)
+    #define BTHREAD_QUEUE_PAUSE() asm volatile("isb" ::: "memory")
+#else
+    #define BTHREAD_QUEUE_PAUSE() do {} while(0)  // compiler barrier fallback
+#endif
+
 namespace bthread {
 
 /**
@@ -15,6 +24,7 @@ namespace bthread {
  * - Pop(): Must only be called from a single consumer thread.
  *
  * Uses atomic lock-free stack for head and tail pointer for FIFO ordering.
+ * Uses adaptive spinning: pause first (low latency), then yield.
  *
  * @tparam T Type that must have a `std::atomic<T*> next` member (intrusive queue).
  */
@@ -46,8 +56,14 @@ public:
     /**
      * @brief Pop item from queue (single consumer).
      * @return Item pointer, or nullptr if empty
+     *
+     * Uses adaptive spinning: pause (CPU instruction) first, then yield.
      */
     T* Pop() {
+        // Adaptive spinning thresholds
+        constexpr int MAX_PAUSE_SPINS = 100;   // Phase 1: CPU pause (~3-10 us)
+        constexpr int MAX_YIELD_SPINS = 10;    // Phase 2: yield (~1-10 ms)
+
         T* t = tail_.load(std::memory_order_acquire);
         if (!t) return nullptr;
 
@@ -68,39 +84,47 @@ public:
         }
 
         // Race condition: another thread just pushed
-        // Bounded spin with yield - safer than infinite spin
-        // Use seq_cst for stronger synchronization guarantee
-        constexpr int MAX_RETRIES = 10000;  // Increased retry limit
-        int retry_count = 0;
+        // Use adaptive spin instead of immediate yield
+        int pause_count = 0;
+        int yield_count = 0;
+
         while (true) {
-            // Re-load next with seq_cst to ensure we see the store
-            T* n = static_cast<T*>(t->next.load(std::memory_order_seq_cst));
+            // Re-load next with acquire (not seq_cst - sufficient for this case)
+            T* n = static_cast<T*>(t->next.load(std::memory_order_acquire));
             if (n) {
                 tail_.store(n, std::memory_order_release);
                 t->next.store(nullptr, std::memory_order_relaxed);  // Clear next pointer
                 return t;
             }
 
-            if (++retry_count >= MAX_RETRIES) {
-                // Fallback: re-check if queue is truly empty
-                // This handles edge cases where the race resolved differently
-                T* current_tail = tail_.load(std::memory_order_acquire);
-                if (current_tail != t) {
-                    // tail changed, restart Pop
-                    return Pop();
-                }
-                // Check head_ to see if there's still contention
-                T* current_head = head_.load(std::memory_order_acquire);
-                if (current_head == nullptr) {
-                    // Queue appears empty now
-                    return nullptr;
-                }
-                // Continue waiting - there's still contention
-                retry_count = 0;  // Reset and keep trying
+            // Adaptive spin
+            if (pause_count < MAX_PAUSE_SPINS) {
+                BTHREAD_QUEUE_PAUSE();
+                ++pause_count;
+                continue;
             }
 
-            // Yield to allow producer to complete
-            std::this_thread::yield();
+            if (yield_count < MAX_YIELD_SPINS) {
+                std::this_thread::yield();
+                ++yield_count;
+                pause_count = 0;  // Reset pause after yield
+                continue;
+            }
+
+            // Timeout after both phases - re-check queue state
+            T* current_tail = tail_.load(std::memory_order_acquire);
+            if (current_tail != t) {
+                // tail changed, restart Pop
+                return Pop();
+            }
+            T* current_head = head_.load(std::memory_order_acquire);
+            if (current_head == nullptr) {
+                // Queue appears empty now
+                return nullptr;
+            }
+            // Reset counters and continue (rare edge case)
+            pause_count = 0;
+            yield_count = 0;
         }
     }
 
