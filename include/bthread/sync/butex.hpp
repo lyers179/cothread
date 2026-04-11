@@ -2,7 +2,6 @@
 
 #include <atomic>
 #include <cstdint>
-#include <mutex>
 
 #include "bthread/sync/butex_queue.hpp"
 #include "bthread/platform/platform.h"
@@ -40,7 +39,7 @@ public:
     ButexQueue& queue() { return queue_; }
 
 private:
-    ButexQueue queue_;           // Lock-free MPSC queue for waiters
+    ButexQueue queue_;           // Lock-free MPMC queue for waiters
     std::atomic<int> value_{0};  // Current value
 
     // Timeout callback

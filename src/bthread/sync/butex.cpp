@@ -109,6 +109,18 @@ int Butex::Wait(int expected_value, const platform::timespec* timeout, bool prep
         queue_.AddToTail(task);
     }
 
+    // 7.5. Re-check value AFTER adding to queue to catch concurrent Wake
+    // Wake might have changed value between our initial check and adding to queue
+    val = value_.load(std::memory_order_acquire);
+    if (val != expected_value) {
+        // Value changed, remove ourselves from queue
+        // Mark as claimed so PopFromHead will skip us
+        node->claimed.store(true, std::memory_order_release);
+        task->is_waiting.store(false, std::memory_order_release);
+        task->waiting_butex = nullptr;
+        return 0;
+    }
+
     // 8. Try to set state to SUSPENDED using CAS
     // Save wake_count before CAS to detect Wake during/after CAS
     int saved_wake_count = task->wake_count.load(std::memory_order_acquire);
@@ -127,10 +139,15 @@ int Butex::Wait(int expected_value, const platform::timespec* timeout, bool prep
     // Check if Wake happened during CAS
     int current_wake_count = task->wake_count.load(std::memory_order_acquire);
     if (current_wake_count != saved_wake_count) {
-        // Wake happened - don't suspend
-        // Set READY and enqueue ourselves
-        task->state.store(TaskState::READY, std::memory_order_release);
-        Scheduler::Instance().EnqueueTask(task);
+        // Wake happened - try to take ownership via CAS
+        // Only one side (Wake or Wait) should enqueue the task
+        TaskState expected = TaskState::SUSPENDED;
+        if (task->state.compare_exchange_strong(expected, TaskState::READY,
+                std::memory_order_acq_rel, std::memory_order_acquire)) {
+            // We won the race - Wake will see state != SUSPENDED and skip us
+            Scheduler::Instance().EnqueueTask(task);
+        }
+        // If CAS failed, Wake already set READY and will enqueue us
         task->waiting_butex = nullptr;
         task->is_waiting.store(false, std::memory_order_release);
         return 0;
@@ -157,14 +174,27 @@ void Butex::Wake(int count) {
     // Wake futex waiters (pthreads)
     platform::FutexWake(&value_, count);
 
+    // Use a fixed-size stack array to avoid dynamic allocation
+    // Most Wake calls are for small counts (1 or a few waiters)
+    constexpr int STATIC_SIZE = 16;
+    TaskMeta* static_tasks[STATIC_SIZE];
+    std::vector<TaskMeta*> dynamic_tasks;
+    TaskMeta** tasks_to_wake = static_tasks;
+    int tasks_capacity = STATIC_SIZE;
+    int tasks_count = 0;
+
+    // Lock-free PopFromHead (MPMC-safe since Task 1)
     int woken = 0;
     while (woken < count) {
         TaskMeta* waiter = queue_.PopFromHead();
         if (!waiter) break;
 
-        // Use relaxed for is_waiting and wake_count - state CAS will synchronize
-        waiter->is_waiting.store(false, std::memory_order_relaxed);
-        waiter->wake_count.fetch_add(1, std::memory_order_relaxed);
+        // Mark as not waiting - this tells Wait that we're handling it
+        waiter->is_waiting.store(false, std::memory_order_release);
+
+        // Increment wake_count with release ordering so Wait's acquire load
+        // will see this change before we check the state
+        waiter->wake_count.fetch_add(1, std::memory_order_release);
 
         // Cancel pending timeout
         if (waiter->waiter.timer_id != 0) {
@@ -172,15 +202,49 @@ void Butex::Wake(int count) {
         }
 
         // Check if task is SUSPENDED - use acquire to see latest state
+        // Must happen AFTER incrementing wake_count for proper synchronization
         TaskState state = waiter->state.load(std::memory_order_acquire);
         if (state == TaskState::SUSPENDED) {
-            // Task is suspended, wake it up
-            waiter->state.store(TaskState::READY, std::memory_order_release);
-            Scheduler::Instance().EnqueueTask(waiter);
+            // Add to our task list
+            if (tasks_count < tasks_capacity) {
+                tasks_to_wake[tasks_count++] = waiter;
+            } else {
+                // Need dynamic allocation for many waiters
+                try {
+                    if (dynamic_tasks.empty()) {
+                        dynamic_tasks.reserve(std::max(count, 64));
+                        // Copy existing static tasks to dynamic
+                        for (int i = 0; i < tasks_count; ++i) {
+                            dynamic_tasks.push_back(static_tasks[i]);
+                        }
+                        tasks_to_wake = dynamic_tasks.data();
+                        tasks_capacity = dynamic_tasks.capacity();
+                    }
+                    dynamic_tasks.push_back(waiter);
+                    tasks_count = dynamic_tasks.size();
+                    tasks_to_wake = dynamic_tasks.data();
+                } catch (...) {
+                    // Allocation failed - wake this task immediately
+                    waiter->state.store(TaskState::READY, std::memory_order_release);
+                    Scheduler::Instance().EnqueueTask(waiter);
+                }
+            }
         }
         // If RUNNING or READY, Wait will handle it
 
         ++woken;
+    }
+
+    // Wake the tasks
+    for (int i = 0; i < tasks_count; ++i) {
+        TaskMeta* waiter = tasks_to_wake[i];
+        // Use CAS to ensure only Wake enqueues (not Wait's wake_count check)
+        TaskState expected = TaskState::SUSPENDED;
+        if (waiter->state.compare_exchange_strong(expected, TaskState::READY,
+                std::memory_order_acq_rel, std::memory_order_acquire)) {
+            Scheduler::Instance().EnqueueTask(waiter);
+        }
+        // If CAS failed, Wait already handled it
     }
 }
 

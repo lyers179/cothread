@@ -1,5 +1,7 @@
 #include "bthread/sync/butex_queue.hpp"
+#include "bthread/sync/butex.hpp"
 #include "bthread/core/task_meta.hpp"
+#include "bthread.h"
 #include <thread>
 #include <vector>
 #include <atomic>
@@ -202,12 +204,87 @@ void test_mpmc_no_double_pop() {
     printf("  PASSED: No task was popped more than once\n");
 }
 
+void test_butex_concurrent_wake() {
+    printf("\nTest: Butex Concurrent Wake (Lock-Free)\n");
+
+    // Test multiple threads calling Wake concurrently
+    // This verifies that PopFromHead is truly MPMC-safe without mutex protection
+    const int N = 10;  // Number of waiters
+    const int WAKERS = 4;  // Number of concurrent wake threads
+
+    Butex butex;
+    std::atomic<int> wait_ready{0};
+    std::atomic<int> woken_count{0};
+    std::atomic<bool> start_wake{false};
+
+    // Structure to pass to bthread
+    struct WaiterArgs {
+        Butex* butex;
+        std::atomic<int>* woken_count;
+        std::atomic<int>* wait_ready;
+    };
+
+    std::vector<bthread_t> tids(N);
+    std::vector<WaiterArgs> args(N);
+
+    // Create N bthreads that will wait on the butex
+    for (int i = 0; i < N; ++i) {
+        args[i].butex = &butex;
+        args[i].woken_count = &woken_count;
+        args[i].wait_ready = &wait_ready;
+        bthread_create(&tids[i], nullptr, [](void* arg) -> void* {
+            auto* wa = static_cast<WaiterArgs*>(arg);
+            wa->wait_ready->fetch_add(1, std::memory_order_release);
+            wa->butex->Wait(0, nullptr);
+            wa->woken_count->fetch_add(1, std::memory_order_release);
+            return nullptr;
+        }, &args[i]);
+    }
+
+    // Wait for all bthreads to be ready (they've incremented wait_ready and are about to wait)
+    while (wait_ready.load(std::memory_order_acquire) < N) {
+        std::this_thread::yield();
+    }
+
+    // Give bthreads time to actually call Wait and block
+    usleep(10000);  // 10ms
+
+    // Launch WAKERS threads that will concurrently call Wake
+    std::vector<std::thread> wakers;
+    for (int i = 0; i < WAKERS; ++i) {
+        wakers.emplace_back([&] {
+            // Wait for start signal
+            while (!start_wake.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+            // Each wakes up to 3 waiters
+            butex.Wake(3);
+        });
+    }
+
+    // Start all wakers at once
+    start_wake.store(true, std::memory_order_release);
+
+    // Wait for all wakers
+    for (auto& w : wakers) w.join();
+
+    // Wait for all bthreads to complete
+    for (int i = 0; i < N; ++i) {
+        bthread_join(tids[i], nullptr);
+    }
+
+    printf("  Waiters: %d, Wakers: %d, Woken: %d\n", N, WAKERS, woken_count.load());
+    assert(woken_count.load() == N);
+    printf("  PASSED: Concurrent Wake test completed without deadlock or crash\n");
+}
+
 int main() {
     printf("Testing MPMC Queue PopFromHead Implementation...\n\n");
 
     test_mpmc_concurrent_pop();
     test_mpmc_interleaved_push_pop();
     test_mpmc_no_double_pop();
+    test_butex_concurrent_wake();
 
     printf("\nMPMC Queue test passed!\n");
     return 0;
