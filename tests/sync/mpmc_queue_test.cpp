@@ -1,6 +1,7 @@
 #include "bthread/sync/butex_queue.hpp"
 #include "bthread/sync/butex.hpp"
 #include "bthread/core/task_meta.hpp"
+#include "bthread/queue/execution_queue.hpp"
 #include "bthread.h"
 #include <thread>
 #include <vector>
@@ -278,6 +279,56 @@ void test_butex_concurrent_wake() {
     printf("  PASSED: Concurrent Wake test completed without deadlock or crash\n");
 }
 
+void test_execution_queue_concurrent() {
+    printf("\nTest: ExecutionQueue Concurrent Submit\n");
+
+    bthread::ExecutionQueue queue;
+    std::atomic<int> executed{0};
+    std::atomic<int> submitted{0};  // Track submitted tasks
+    std::atomic<bool> producers_done{false};
+
+    const int PRODUCERS = 10;
+    const int TASKS_PER_PRODUCER = 100;
+    const int TOTAL_TASKS = PRODUCERS * TASKS_PER_PRODUCER;
+
+    // Producer threads submit tasks concurrently
+    std::vector<std::thread> producers;
+    for (int i = 0; i < PRODUCERS; ++i) {
+        producers.emplace_back([&] {
+            for (int j = 0; j < TASKS_PER_PRODUCER; ++j) {
+                queue.Submit([&executed] {
+                    executed.fetch_add(1, std::memory_order_relaxed);
+                });
+                submitted.fetch_add(1, std::memory_order_relaxed);
+            }
+        });
+    }
+
+    // Single consumer thread executes tasks
+    std::thread consumer([&] {
+        while (executed.load(std::memory_order_acquire) < TOTAL_TASKS) {
+            if (!queue.ExecuteOne()) {
+                // If queue is empty but producers are done, we might have a race
+                // Wait a bit for tasks to appear
+                std::this_thread::yield();
+            }
+        }
+    });
+
+    // Wait for all producers
+    for (auto& p : producers) p.join();
+    producers_done.store(true, std::memory_order_release);
+
+    // Wait for consumer to finish
+    consumer.join();
+
+    printf("  Producers: %d, Tasks per producer: %d, Submitted: %d, Executed: %d (expected: %d)\n",
+           PRODUCERS, TASKS_PER_PRODUCER, submitted.load(), executed.load(), TOTAL_TASKS);
+    assert(submitted.load() == TOTAL_TASKS);
+    assert(executed.load() == TOTAL_TASKS);
+    printf("  PASSED: All tasks submitted and executed correctly\n");
+}
+
 int main() {
     printf("Testing MPMC Queue PopFromHead Implementation...\n\n");
 
@@ -285,6 +336,7 @@ int main() {
     test_mpmc_interleaved_push_pop();
     test_mpmc_no_double_pop();
     test_butex_concurrent_wake();
+    test_execution_queue_concurrent();
 
     printf("\nMPMC Queue test passed!\n");
     return 0;

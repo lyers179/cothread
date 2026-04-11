@@ -20,20 +20,15 @@ bool ExecutionQueue::ExecuteOne() {
         return false;
     }
 
-    Task task;
-    {
-        std::lock_guard<std::mutex> lock(tasks_mutex_);
-        if (tasks_.empty()) {
-            pending_.store(false, std::memory_order_release);
-            return false;
-        }
-        task = std::move(tasks_.front());
-        tasks_.pop();
-
-        if (tasks_.empty()) {
-            pending_.store(false, std::memory_order_release);
-        }
+    // Pop from MpscQueue (lock-free, single consumer)
+    TaskWrapper* wrapper = queue_.Pop();
+    if (!wrapper) {
+        pending_.store(false, std::memory_order_release);
+        return false;
     }
+
+    Task task = std::move(wrapper->task);
+    delete wrapper;
 
     if (task) {
         task();
@@ -57,11 +52,12 @@ void ExecutionQueue::Submit(Task task) {
         return;
     }
 
-    {
-        std::lock_guard<std::mutex> lock(tasks_mutex_);
-        tasks_.push(std::move(task));
-        pending_.store(true, std::memory_order_release);
-    }
+    // Create wrapper and push to MpscQueue (lock-free, multi-producer)
+    TaskWrapper* wrapper = new TaskWrapper();
+    wrapper->task = std::move(task);
+
+    queue_.Push(wrapper);
+    pending_.store(true, std::memory_order_release);
 }
 
 } // namespace bthread

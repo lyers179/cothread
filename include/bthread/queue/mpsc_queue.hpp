@@ -54,7 +54,6 @@ public:
         T* next = static_cast<T*>(t->next.load(std::memory_order_acquire));
         if (next) {
             tail_.store(next, std::memory_order_release);
-            t->next.store(nullptr, std::memory_order_relaxed);
             return t;
         }
 
@@ -63,32 +62,43 @@ public:
         if (head_.compare_exchange_strong(expected, nullptr,
                 std::memory_order_acq_rel, std::memory_order_acquire)) {
             tail_.store(nullptr, std::memory_order_release);
-            t->next.store(nullptr, std::memory_order_relaxed);
             return t;
         }
 
         // Race condition: another thread just pushed
-        // Adaptive spin before yielding - reduces context switches
-        constexpr int MAX_SPINS = 100;  // Spin 100 times before yielding
-        int spin_count = 0;
-        while (!t->next.load(std::memory_order_acquire)) {
-            if (++spin_count < MAX_SPINS) {
-                // Use pause instruction on x86 to reduce power consumption
-                #if defined(__x86_64__) || defined(_M_X64)
-                __builtin_ia32_pause();
-                #else
-                // Other architectures use compiler barrier
-                std::atomic_signal_fence(std::memory_order_acquire);
-                #endif
-            } else {
-                std::this_thread::yield();
-                spin_count = 0;  // Reset after yield to continue spinning
+        // Bounded spin with yield - safer than infinite spin
+        // Use seq_cst for stronger synchronization guarantee
+        constexpr int MAX_RETRIES = 10000;  // Increased retry limit
+        int retry_count = 0;
+        while (true) {
+            // Re-load next with seq_cst to ensure we see the store
+            T* n = static_cast<T*>(t->next.load(std::memory_order_seq_cst));
+            if (n) {
+                tail_.store(n, std::memory_order_release);
+                return t;
             }
+
+            if (++retry_count >= MAX_RETRIES) {
+                // Fallback: re-check if queue is truly empty
+                // This handles edge cases where the race resolved differently
+                T* current_tail = tail_.load(std::memory_order_acquire);
+                if (current_tail != t) {
+                    // tail changed, restart Pop
+                    return Pop();
+                }
+                // Check head_ to see if there's still contention
+                T* current_head = head_.load(std::memory_order_acquire);
+                if (current_head == nullptr) {
+                    // Queue appears empty now
+                    return nullptr;
+                }
+                // Continue waiting - there's still contention
+                retry_count = 0;  // Reset and keep trying
+            }
+
+            // Yield to allow producer to complete
+            std::this_thread::yield();
         }
-        T* n = static_cast<T*>(t->next.load(std::memory_order_acquire));
-        tail_.store(n, std::memory_order_release);
-        t->next.store(nullptr, std::memory_order_relaxed);
-        return t;
     }
 
     /**

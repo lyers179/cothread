@@ -1,16 +1,15 @@
 #pragma once
 
 #include <functional>
-#include <mutex>
 #include <atomic>
-#include <queue>
 
+#include "bthread/queue/mpsc_queue.hpp"
 #include "bthread/platform/platform.h"
 
 namespace bthread {
 
 // Execution queue for ordered task execution
-// Tasks execute in the order they are submitted (single-threaded)
+// Now uses lock-free MPSC queue internally
 class ExecutionQueue {
 public:
     using Task = std::function<void()>;
@@ -36,13 +35,17 @@ public:
 
     // Check if there are pending tasks
     bool HasPending() const {
-        return !pending_.load(std::memory_order_acquire);
+        return pending_.load(std::memory_order_acquire);
     }
 
 private:
-    std::queue<Task> tasks_;
-    mutable std::mutex tasks_mutex_;
+    // Internal wrapper structure for MpscQueue (intrusive queue requires `next` member)
+    struct TaskWrapper {
+        Task task;
+        std::atomic<TaskWrapper*> next{nullptr};
+    };
 
+    MpscQueue<TaskWrapper> queue_;  // Lock-free MPSC queue
     std::atomic<bool> stopped_{false};
     std::atomic<bool> pending_{false};
 };
