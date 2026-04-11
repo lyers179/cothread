@@ -27,6 +27,31 @@ Phase 4 的 lock-free 实现使用了 `std::this_thread::yield()` 进行 spin，
 - **Phase 1**: CPU pause 指令（低延迟，无上下文切换）
 - **Phase 2**: yield（作为 pause 失败后的 fallback）
 
+## 问题根因
+
+### Phase 5 引入的 Bug
+
+Phase 5 的 PopFromHead 在队列非空时引入了 timeout 返回 nullptr:
+
+```cpp
+// 错误行为
+if (pause_count >= MAX_PAUSE && yield_count >= MAX_YIELD) {
+    return nullptr;  // ← 即使队列有节点也返回 nullptr
+}
+```
+
+这导致 Wake 调用 PopFromHead 后认为队列空了，停止唤醒 waiter。实际 waiter 还在队列中未被唤醒，导致 bthread 创建后卡住。
+
+### 正确行为
+
+PopFromHead 应该只在队列真正空时返回 nullptr:
+
+```cpp
+// 正确行为
+if (!head && !tail) return nullptr;  // ← 只有真正空才返回 nullptr
+// 其他情况继续 retry
+```
+
 ## 设计方案
 
 ### pause vs yield 对比
