@@ -28,30 +28,30 @@
 
 ## 性能基准
 
-### 第三阶段优化后（2026-04-11）
+### 第四阶段优化后（2026-04-11）
 
 | 基准测试 | 结果 |
 |----------|------|
-| Create/Join | 152K ops/sec (6.5 µs/op) |
-| Yield | 32M yields/sec (31 ns/yield) |
-| Mutex Contention | 19M lock/unlock/sec (0.05 µs/op) |
-| **vs std::thread** | **10x faster** |
-| Scalability (8 workers) | 7.8x speedup |
-| Stack Performance | 298K ops/sec |
-| Producer-Consumer | 750K items/sec |
+| Create/Join | 92K ops/sec (10.8 µs/op) |
+| Yield | 8M yields/sec (129 ns/yield) |
+| Mutex Contention | 12M lock/unlock/sec (0.08 µs/op) |
+| **vs std::thread** | **3.79x faster** |
+| Scalability (8 workers) | 5.86x speedup |
+| Stack Performance | 142K ops/sec |
+| Producer-Consumer | 463K items/sec |
 | **Benchmark 通过率** | **100%** |
 
 ### 完整指标对比
 
-| 指标 | 初始 | Phase 1 | Phase 2 | Phase 3 (最新) |
-|------|------|---------|---------|----------------|
-| Create/Join | ~5K | 81K | 83K | **152K** |
-| vs std::thread | 慢 6.92x | 快 3.19x | 快 3.15x | **快 10x** |
-| Scalability (8w) | - | 6.64x | 8.50x | **7.8x** |
-| Stack Performance | - | 148K | 162K | **298K** |
-| Producer-Consumer | - | 492K | 728K | **750K** |
-| Yield | - | 8M/sec | 8M/sec | **32M/sec** |
-| Mutex Contention | - | 11M/sec | 12M/sec | **19M/sec** |
+| 指标 | 初始 | Phase 1 | Phase 2 | Phase 3 | Phase 4 (最新) |
+|------|------|---------|---------|---------|----------------|
+| Create/Join | ~5K | 81K | 83K | 152K | **92K** |
+| vs std::thread | 慢 6.92x | 快 3.19x | 快 3.15x | 快 10x | **快 3.79x** |
+| Scalability (8w) | - | 6.64x | 8.50x | 7.8x | **5.86x** |
+| Stack Performance | - | 148K | 162K | 298K | **142K** |
+| Producer-Consumer | - | 492K | 728K | 750K | **463K** |
+| Yield | - | 8M/sec | 8M/sec | 32M/sec | **8M/sec** |
+| Mutex Contention | - | 11M/sec | 12M/sec | 19M/sec | **12M/sec** |
 
 ### perf 分析优化
 

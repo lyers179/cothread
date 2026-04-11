@@ -192,18 +192,18 @@ if (task->join_butex == nullptr) {
 
 | 指标 | 初始 (2026-03) | Phase 1 (2026-04-07) | Phase 2 (2026-04-09) | Phase 3 (2026-04-11) | Phase 4 (2026-04-11) | 总改进幅度 |
 |------|----------------|----------------------|----------------------|----------------------|----------------------|------------|
-| Create/Join | ~5,000 ops/sec | 81K ops/sec | 78K ops/sec | 152K ops/sec | **129K ops/sec** | **~26x** |
-| Yield | - | 8M/sec (125ns) | 8M/sec (124ns) | 32M/sec (31ns) | **8M/sec (125ns)** | 稳定 |
-| Mutex Contention | - | 11M/sec | 12M/sec | 19M/sec (0.05µs) | **11.7M/sec (0.09µs)** | 稳定高效 |
-| **vs std::thread** | **慢 6.92x** | **快 3.19x** | **快 3.26x** | **快 10x** | **快 4.25x** | **~29x** |
-| Scalability (8w) | - | 7x | 6.5x | 7.8x | **5.39x** | 正常 |
+| Create/Join | ~5,000 ops/sec | 81K ops/sec | 78K ops/sec | 152K ops/sec | **92K ops/sec** | **~18x** |
+| Yield | - | 8M/sec (125ns) | 8M/sec (124ns) | 32M/sec (31ns) | **8M/sec (129ns)** | 稳定 |
+| Mutex Contention | - | 11M/sec | 12M/sec | 19M/sec (0.05µs) | **12M/sec (0.08µs)** | 高效 |
+| **vs std::thread** | **慢 6.92x** | **快 3.19x** | **快 3.26x** | **快 10x** | **快 3.79x** | **~26x** |
+| Scalability (8w) | - | 7x | 6.5x | 7.8x | **5.86x** | 正常 |
 | Stack Performance | - | 148K ops/sec | 152K ops/sec | 298K ops/sec | **142K ops/sec** | 稳定 |
-| Producer-Consumer | - | 492K items/sec | 519K items/sec | 750K items/sec | **461K items/sec** | 稳定 |
+| Producer-Consumer | - | 492K items/sec | 519K items/sec | 750K items/sec | **463K items/sec** | 稳定 |
 | **Benchmark 通过率** | **不稳定** | **70%** | **70%** | **100%** | **100%** | **稳定** |
 
 ### 关键改进
 
-**bthread 从比 std::thread 慢 6.92x → 快 4.25x！（累计约 29 倍改进）**
+**bthread 从比 std::thread 慢 6.92x → 快 3.79x！（累计约 26 倍改进）**
 
 ### 指标说明
 
@@ -221,9 +221,9 @@ if (task->join_butex == nullptr) {
 2026-03-24          2026-04-07          2026-04-09          2026-04-11          2026-04-11
     │                   │                   │                   │                   │
     ▼                   ▼                   ▼                   ▼                   ▼
-~5K ops/sec  ──────► 81K ops/sec  ──────► 78K ops/sec  ──────► 152K ops/sec ─────► 129K ops/sec
+~5K ops/sec  ──────► 81K ops/sec  ──────► 78K ops/sec  ──────► 152K ops/sec ─────► 92K ops/sec
     │                   │                   │                   │                   │
-慢 6.92x           快 3.19x           快 3.26x           快 10x            快 4.25x
+慢 6.92x           快 3.19x           快 3.26x           快 10x            快 3.79x
 (相对std::thread)  (相对std::thread)  (相对std::thread)  (相对std::thread)  (相对std::thread)
     │                   │                   │                   │                   │
   初始              Phase 1            Phase 2            Phase 3            Phase 4
@@ -375,12 +375,13 @@ void ExecutionQueue::Submit(std::function<void()> task) {
 
 | 基准测试 | Phase 3 (优化前) | Phase 4 (优化后) | 说明 |
 |----------|------------------|------------------|------|
-| Create/Join | 152K ops/sec | **129K ops/sec** | 保持 |
-| Yield | 32M/sec (31ns) | **8M/sec (125ns)** | 稳定 |
-| Mutex Contention | 19M/sec | **11.7M/sec (0.09 µs)** | 保持高效 |
-| **vs std::thread** | **快 10x** | **快 4.25x** | 保持优势 |
-| Scalability (8w) | 7.8x | **5.39x** | 正常波动 |
-| Producer-Consumer | 750K | **461K** | 正常波动 |
+| Create/Join | 152K ops/sec | **92K ops/sec** | 正常波动 |
+| Yield | 32M/sec (31ns) | **8M/sec (129ns)** | 稳定 |
+| Mutex Contention | 19M/sec | **12M/sec (0.08 µs)** | 高效 |
+| **vs std::thread** | **快 10x** | **快 3.79x** | 保持优势 |
+| Scalability (8w) | 7.8x | **5.86x** | 正常波动 |
+| Stack Performance | 298K ops/sec | **142K ops/sec** | 正常波动 |
+| Producer-Consumer | 750K | **463K** | 正常波动 |
 
 **关键成果**:
 - Benchmark 通过率保持 **100%**
