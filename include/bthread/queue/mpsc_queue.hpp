@@ -54,6 +54,7 @@ public:
         T* next = static_cast<T*>(t->next.load(std::memory_order_acquire));
         if (next) {
             tail_.store(next, std::memory_order_release);
+            t->next.store(nullptr, std::memory_order_relaxed);  // Clear next pointer
             return t;
         }
 
@@ -62,6 +63,7 @@ public:
         if (head_.compare_exchange_strong(expected, nullptr,
                 std::memory_order_acq_rel, std::memory_order_acquire)) {
             tail_.store(nullptr, std::memory_order_release);
+            t->next.store(nullptr, std::memory_order_relaxed);  // Clear next pointer
             return t;
         }
 
@@ -75,6 +77,7 @@ public:
             T* n = static_cast<T*>(t->next.load(std::memory_order_seq_cst));
             if (n) {
                 tail_.store(n, std::memory_order_release);
+                t->next.store(nullptr, std::memory_order_relaxed);  // Clear next pointer
                 return t;
             }
 

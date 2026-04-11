@@ -103,6 +103,7 @@ void ButexQueue::AddToHead(TaskMeta* task) {
 
 TaskMeta* ButexQueue::PopFromHead() {
     int spin_count = 0;
+    constexpr int MAX_SPINS = 10000;
     while (true) {
         // Load head with acquire
         ButexWaiterNode* head = head_.load(std::memory_order_acquire);
@@ -111,10 +112,13 @@ TaskMeta* ButexQueue::PopFromHead() {
             ButexWaiterNode* tail = tail_.load(std::memory_order_acquire);
             if (tail && tail != head) {
                 // Node being added, spin briefly
-                if (spin_count++ < 1000) {
+                if (spin_count++ < MAX_SPINS) {
                     std::this_thread::yield();
                     continue;
                 }
+                // Timeout: tail set but head not set after many spins
+                // This indicates a stuck state - return nullptr to avoid deadlock
+                return nullptr;
             }
             return nullptr;
         }
@@ -128,6 +132,22 @@ TaskMeta* ButexQueue::PopFromHead() {
                 ButexWaiterNode* expected = head;
                 head_.compare_exchange_weak(expected, next,
                     std::memory_order_acq_rel, std::memory_order_relaxed);
+            } else {
+                // No next, and head is claimed - check if queue is truly empty
+                ButexWaiterNode* tail = tail_.load(std::memory_order_acquire);
+                if (tail == head) {
+                    // Queue is empty (head and tail both point to claimed node with no next)
+                    // Try to reset both to nullptr
+                    ButexWaiterNode* expected_head = head;
+                    if (head_.compare_exchange_strong(expected_head, nullptr,
+                            std::memory_order_acq_rel, std::memory_order_relaxed)) {
+                        tail_.store(nullptr, std::memory_order_release);
+                    }
+                }
+                if (spin_count++ >= MAX_SPINS) {
+                    // Timeout waiting for next or queue reset
+                    return nullptr;
+                }
             }
             continue;
         }
@@ -141,8 +161,11 @@ TaskMeta* ButexQueue::PopFromHead() {
             if (tail != head) {
                 // Node being added, spin and retry
                 head->claimed.store(false, std::memory_order_relaxed);
-                if (spin_count++ < 1000) {
+                if (spin_count++ < MAX_SPINS) {
                     std::this_thread::yield();
+                } else {
+                    // Timeout: return nullptr to avoid deadlock
+                    return nullptr;
                 }
                 continue;
             }
@@ -159,6 +182,10 @@ TaskMeta* ButexQueue::PopFromHead() {
 
         // CAS failed, reset claimed and retry
         head->claimed.store(false, std::memory_order_relaxed);
+        if (spin_count++ >= MAX_SPINS) {
+            // Too many retries, return nullptr
+            return nullptr;
+        }
     }
 }
 

@@ -48,7 +48,6 @@ int main() {
 
     assert(xmm_test_passed);
     printf("  PASSED: SIMD values preserved across context switch\n");
-    bthread_shutdown();
 
     // Test 2: Non-SIMD Works
     printf("\nTest 2: Non-SIMD Works\n");

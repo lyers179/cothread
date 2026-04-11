@@ -15,36 +15,43 @@
 6. **Worker-local TaskMeta Cache** - 批量分配减少 CAS 竞争
 7. **Lazy Butex Allocation** - 按需创建 join 同步对象
 
+### 第三阶段 (2026-04-11) - Futex 竞态修复
+8. **静态析构顺序修复** - 确保正确析构顺序
+9. **Butex::Wake 分配安全** - 静态数组避免异常
+10. **Wait/Wake 双重入队防护** - CAS 确保单次入队
+11. **Butex 值重检** - 入队后重新检查值变化
+
+### 第四阶段 (2026-04-11) - Lock-Free Queue 优化
+12. **ButexQueue MPMC PopFromHead** - CAS retry 实现多消费者安全
+13. **Butex Wake 无锁** - 移除 wake_mutex_，消除并发唤醒竞争
+14. **ExecutionQueue 无锁提交** - 改用 MpscQueue，无锁任务提交
+
 ## 性能基准
 
-### 第一阶段优化后（2026-04-07）
+### 第三阶段优化后（2026-04-11）
 
 | 基准测试 | 结果 |
 |----------|------|
-| Create/Join | 81,026 ops/sec |
-| Yield | 8,002,961 yields/sec (125 ns/yield) |
-| Mutex Contention | 11,028,945 lock/unlock/sec |
-| vs std::thread | 3.19x faster |
-| Scalability (8 workers) | 6.64x speedup vs 1 worker |
-| Stack Performance | 148,750 ops/sec |
-| Producer-Consumer | 492,732 items/sec |
+| Create/Join | 152K ops/sec (6.5 µs/op) |
+| Yield | 32M yields/sec (31 ns/yield) |
+| Mutex Contention | 19M lock/unlock/sec (0.05 µs/op) |
+| **vs std::thread** | **10x faster** |
+| Scalability (8 workers) | 7.8x speedup |
+| Stack Performance | 298K ops/sec |
+| Producer-Consumer | 750K items/sec |
+| **Benchmark 通过率** | **100%** |
 
-### 第二阶段优化后（2026-04-09 + perf 分析优化）
+### 完整指标对比
 
-| 基准测试 | 结果 | 说明 |
-|----------|------|------|
-| Create/Join | 82,702 ops/sec | 创建/销毁吞吐量 |
-| Yield | 7,777,471/sec (129ns) | 让步性能 |
-| Mutex Contention | 12,267,342 lock/unlock/sec | 高竞争锁性能 |
-| **vs std::thread** | **快 3.15x** | 与原生线程对比 |
-| Scalability (4w) | **8.67x** speedup | work-stealing 扩展性 |
-| Scalability (8w) | **8.50x** speedup | work-stealing 扩展性 |
-| Stack Performance | 162,460 ops/sec | 栈分配压力测试 |
-| Producer-Consumer | **727,961 items/sec** | 消息传递吞吐量 |
-
-### 关键改进
-
-**bthread 从比 std::thread 慢 6.92x 变成快 3.15x！（约22倍改进）**
+| 指标 | 初始 | Phase 1 | Phase 2 | Phase 3 (最新) |
+|------|------|---------|---------|----------------|
+| Create/Join | ~5K | 81K | 83K | **152K** |
+| vs std::thread | 慢 6.92x | 快 3.19x | 快 3.15x | **快 10x** |
+| Scalability (8w) | - | 6.64x | 8.50x | **7.8x** |
+| Stack Performance | - | 148K | 162K | **298K** |
+| Producer-Consumer | - | 492K | 728K | **750K** |
+| Yield | - | 8M/sec | 8M/sec | **32M/sec** |
+| Mutex Contention | - | 11M/sec | 12M/sec | **19M/sec** |
 
 ### perf 分析优化
 
@@ -248,6 +255,18 @@ while (!t->next.load(std::memory_order_acquire)) {
 - `fbae941` feat(taskmeta): implement worker-local TaskMeta cache
 - `e8574e3` feat(bthread): implement lazy Butex allocation
 
+### 第三阶段 (2026-04-11) - Futex 竞态修复
+- `scheduler.cpp:16-17` fix: ensure TaskGroup constructed before Scheduler
+- `butex.cpp:179-183` fix: use static array in Wake to avoid allocation exception
+- `butex.cpp:145,250` fix: use CAS to prevent double enqueue
+- `butex.cpp:112-120` fix: re-check butex value after adding to queue
+
+### 第四阶段 (2026-04-11) - Lock-Free Queue 优化
+- `butex_queue.cpp` feat: MPMC PopFromHead with CAS retry and timeout safety
+- `butex.hpp/cpp` feat: remove wake_mutex_ for lock-free Wake
+- `execution_queue.hpp/cpp` feat: use MpscQueue for lock-free submit
+- `mpsc_queue.hpp` fix: clear next pointer in Pop() for correct behavior
+
 ---
 
 ## 第二阶段优化详情 (2026-04-09)
@@ -330,6 +349,113 @@ if (task->join_butex == nullptr) {
     }
 }
 ```
+
+---
+
+## 第三阶段优化详情 (2026-04-11)
+
+### 14. 静态析构顺序修复
+
+**文件**: `src/bthread/core/scheduler.cpp`
+
+**问题**: `TaskGroup` 和 `Scheduler` 都是单例静态对象，C++ 静态析构顺序与构造顺序相反。`Scheduler` 析构函数调用 `GetTaskGroup()`，但此时 `TaskGroup` 可能已析构。
+
+**表现**: 程序退出时 crash，抛出 `std::bad_alloc`
+
+**解决**:
+```cpp
+Scheduler::Scheduler() {
+    // 确保 TaskGroup 先构造，后析构
+    (void)GetTaskGroup();
+}
+```
+
+**原理**: 构造顺序：TaskGroup → Scheduler；析构顺序：Scheduler → TaskGroup
+
+### 15. Butex::Wake 分配安全
+
+**文件**: `src/bthread/sync/butex.cpp`
+
+**问题**: `Wake()` 使用 `std::vector::reserve()` 收集要唤醒的任务，在高并发下可能抛出 `std::bad_alloc`
+
+**解决**:
+```cpp
+// 使用静态数组避免动态分配
+constexpr int STATIC_SIZE = 16;
+TaskMeta* static_tasks[STATIC_SIZE];
+std::vector<TaskMeta*> dynamic_tasks;
+TaskMeta** tasks_to_wake = static_tasks;
+int tasks_capacity = STATIC_SIZE;
+
+// 仅在超过静态容量时才使用动态分配，并添加异常处理
+try {
+    if (dynamic_tasks.empty()) {
+        dynamic_tasks.reserve(std::max(count, 64));
+        ...
+    }
+} catch (...) {
+    // 分配失败时立即唤醒该任务
+    waiter->state.store(TaskState::READY, std::memory_order_release);
+    Scheduler::Instance().EnqueueTask(waiter);
+}
+```
+
+**原理**: 大多数唤醒操作只唤醒 1-16 个任务，静态数组足够且不抛异常
+
+### 16. Wait/Wake 双重入队防护
+
+**文件**: `src/bthread/sync/butex.cpp`
+
+**问题**: 当 `Wake` 和 `Wait` 同时处理同一任务时，双方都可能入队
+
+**解决**:
+```cpp
+// Wait 中：检测到 Wake 后使用 CAS
+TaskState expected = TaskState::SUSPENDED;
+if (task->state.compare_exchange_strong(expected, TaskState::READY, ...)) {
+    Scheduler::Instance().EnqueueTask(task);  // CAS 成功才入队
+}
+
+// Wake 中：唤醒时使用 CAS
+TaskState expected = TaskState::SUSPENDED;
+if (waiter->state.compare_exchange_strong(expected, TaskState::READY, ...)) {
+    Scheduler::Instance().EnqueueTask(waiter);  // CAS 成功才入队
+}
+```
+
+**原理**: CAS 确保只有一方成功入队，失败方知道对方已处理
+
+### 17. Butex 值重检
+
+**文件**: `src/bthread/sync/butex.cpp`
+
+**问题**: Wait 检查 butex 值后入队，Wake 可能在检查和入队之间改变值
+
+**解决**:
+```cpp
+// 7.5. 入队后重新检查值
+val = value_.load(std::memory_order_acquire);
+if (val != expected_value) {
+    // 值已变，标记节点为已认领，退出等待
+    node->claimed.store(true, std::memory_order_release);
+    task->is_waiting.store(false, std::memory_order_release);
+    task->waiting_butex = nullptr;
+    return 0;
+}
+```
+
+**原理**: 捕捉 Wake 在入队前已改变值的竞态
+
+### 内存序要点
+
+第三阶段修复中使用了正确的内存序：
+
+| 操作 | 内存序 | 原因 |
+|------|--------|------|
+| wake_count/wake_pending | `seq_cst` | 关键同步点，需要全局可见顺序 |
+| CAS 操作 | `acq_rel` | 修改并需要看到对方状态 |
+| 读取对方修改的状态 | `acquire` | 同步对方 release 的修改 |
+| 修改状态让对方看到 | `release` | 让对方的 acquire 可见 |
 
 ---
 

@@ -47,7 +47,6 @@ int main() {
 
     assert(test_counter.load() == N);
     printf("  PASSED: All %d tasks executed\n", N);
-    bthread_shutdown();
 
     // Test 2: High Contention Mutex
     printf("\nTest 2: High Contention Mutex\n");
@@ -75,8 +74,8 @@ int main() {
 
     assert(test_counter.load() == N2);
     printf("  PASSED: High contention test completed\n", N2);
-    bthread_shutdown();
 
     printf("\nAll MPSC Queue tests passed!\n");
+    bthread_shutdown();
     return 0;
 }
