@@ -250,18 +250,36 @@ void Scheduler::WakeButex(void* butex, int count) {
     }
 }
 
-void Scheduler::WakeIdleWorkers(int count) {
-    // Use atomic array for lock-free wake - avoids mutex contention
-    int wc = worker_count_.load(std::memory_order_acquire);
+void Scheduler::RegisterIdleWorker(int worker_id) {
+    // Push worker_id onto idle list (lock-free Treiber stack)
+    int old_head = idle_head_.load(std::memory_order_acquire);
+    do {
+        idle_next_[worker_id].store(old_head, std::memory_order_relaxed);
+    } while (!idle_head_.compare_exchange_weak(old_head, worker_id,
+            std::memory_order_release, std::memory_order_acquire));
+}
 
-    // Wake ALL workers - each WakeUp increments wake_count_
-    // This ensures that any worker about to sleep will see the incremented value
-    // and return from FutexWait with EAGAIN.
-    //
-    // Note: Waking all workers might seem inefficient, but it's necessary for correctness.
-    // Each WakeUp is cheap (atomic increment + conditional syscall).
-    for (int i = 0; i < wc; ++i) {
-        Worker* w = workers_atomic_[i].load(std::memory_order_acquire);
+int Scheduler::PopIdleWorker() {
+    // Pop one worker from idle list (lock-free)
+    int worker_id = idle_head_.load(std::memory_order_acquire);
+    while (worker_id >= 0) {
+        int next = idle_next_[worker_id].load(std::memory_order_relaxed);
+        if (idle_head_.compare_exchange_weak(worker_id, next,
+                std::memory_order_acq_rel, std::memory_order_acquire)) {
+            return worker_id;  // Successfully popped
+        }
+        // CAS failed, retry with new head
+    }
+    return -1;  // No idle workers
+}
+
+void Scheduler::WakeIdleWorkers(int count) {
+    // Optimized: Only wake N idle workers (not ALL workers)
+    for (int i = 0; i < count; ++i) {
+        int idle_id = PopIdleWorker();
+        if (idle_id < 0) break;  // No idle workers available
+
+        Worker* w = workers_atomic_[idle_id].load(std::memory_order_acquire);
         if (w) {
             w->WakeUp();
         }
