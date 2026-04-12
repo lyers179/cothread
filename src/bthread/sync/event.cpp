@@ -12,10 +12,7 @@ Event::Event(bool initial_set, bool auto_reset)
 }
 
 Event::~Event() {
-    // Drain remaining waiters from lock-free queue
-    while (EventWaiterNode* node = waiter_queue_.Pop()) {
-        delete node;
-    }
+    // IntrusiveWaiterQueue - no dynamic allocation, no cleanup needed
 }
 
 void Event::wait() {
@@ -98,27 +95,16 @@ void Event::reset() {
 }
 
 void Event::enqueue_waiter(TaskMetaBase* task) {
-    EventWaiterNode* node = new EventWaiterNode{task};
-    waiter_queue_.Push(node);  // Lock-free MPSC push
+    waiter_queue_.Push(task);  // Direct push, no allocation
 }
 
 TaskMetaBase* Event::dequeue_waiter() {
-    EventWaiterNode* node = waiter_queue_.Pop();  // Lock-free pop
-    if (!node) return nullptr;
-    TaskMetaBase* task = node->task;
-    delete node;
-    return task;
+    return waiter_queue_.Pop();  // Direct pop, no allocation
 }
 
 void Event::wake_all_waiters() {
-    // Drain entire queue - lock-free
-    std::vector<TaskMetaBase*> waiters;
-    while (EventWaiterNode* node = waiter_queue_.Pop()) {
-        waiters.push_back(node->task);
-        delete node;
-    }
-
-    for (TaskMetaBase* waiter : waiters) {
+    // Drain entire queue lock-free - no allocation/deallocation
+    while (TaskMetaBase* waiter = waiter_queue_.Pop()) {
         waiter->state.store(TaskState::READY, std::memory_order_release);
         waiter->waiting_sync = nullptr;
         Scheduler::Instance().Submit(waiter);

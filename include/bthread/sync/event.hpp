@@ -6,7 +6,7 @@
 #include <chrono>
 
 #include "bthread/core/task_meta_base.hpp"
-#include "bthread/queue/mpsc_queue.hpp"
+#include "bthread/queue/intrusive_waiter_queue.hpp"
 
 namespace bthread {
 
@@ -124,12 +124,8 @@ private:
     std::atomic<bool> state_{false};
     bool auto_reset_{false};
 
-    // Lock-free waiter queue (Optimization: eliminate mutex contention)
-    struct EventWaiterNode {
-        TaskMetaBase* task;
-        std::atomic<EventWaiterNode*> next{nullptr};  // Required by MpscQueue
-    };
-    MpscQueue<EventWaiterNode> waiter_queue_;
+    // Intrusive waiter queue (zero-allocation)
+    IntrusiveWaiterQueue waiter_queue_;
 
     // Helper methods (lock-free)
     void enqueue_waiter(TaskMetaBase* task);
