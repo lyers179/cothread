@@ -6,7 +6,7 @@
 #include <chrono>
 
 #include "bthread/core/task_meta_base.hpp"
-#include "bthread/queue/intrusive_waiter_queue.hpp"
+#include "bthread/queue/mpsc_queue.hpp"  // WaiterQueue uses waiter_next policy
 
 namespace bthread {
 
@@ -125,7 +125,7 @@ private:
     bool auto_reset_{false};
 
     // Intrusive waiter queue (zero-allocation)
-    IntrusiveWaiterQueue waiter_queue_;
+    WaiterQueue waiter_queue_;  // Uses waiter_next field via policy
 
     // Helper methods (lock-free)
     void enqueue_waiter(TaskMetaBase* task);
