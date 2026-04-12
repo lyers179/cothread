@@ -30,6 +30,11 @@ struct CoroutineMeta;
 
 namespace bthread {
 
+// Forward declaration for test
+namespace test {
+class IdleRegistryTest;
+}
+
 /**
  * @brief Unified scheduler managing both bthread and coroutine tasks.
  *
@@ -50,6 +55,7 @@ namespace bthread {
  */
 class Scheduler {
     friend class Worker;  // Allow Worker to call RegisterIdleWorker
+    friend class test::IdleRegistryTest;  // Allow test to access private members
 public:
     /// Get singleton instance
     static Scheduler& Instance();
@@ -107,6 +113,14 @@ public:
 
     /// Called by worker when it's ready (has entered Run loop)
     void WorkerReady();
+
+    // ========== Test Helper Methods (for unit testing) ==========
+
+    /// Register an idle worker for testing purposes
+    void RegisterIdleWorkerForTest(int worker_id);
+
+    /// Reset idle registry state for testing
+    void ResetIdleRegistryForTest();
 
     // ========== Unified Task Submission ==========
 

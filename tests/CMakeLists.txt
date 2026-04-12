@@ -46,6 +46,11 @@ add_executable(task_cache_test task_cache_test.cpp)
 target_link_libraries(task_cache_test bthread gtest gtest_main)
 add_test(NAME TaskCacheTest COMMAND task_cache_test)
 
+# Idle registry test (requires gtest and pthread)
+add_executable(idle_registry_test idle_registry_test.cpp)
+target_link_libraries(idle_registry_test bthread gtest gtest_main pthread)
+add_test(NAME IdleRegistryTest COMMAND idle_registry_test)
+
 # Lazy Butex test (requires gtest and pthread)
 add_executable(butex_lazy_test butex_lazy_test.cpp)
 target_link_libraries(butex_lazy_test bthread gtest gtest_main pthread)

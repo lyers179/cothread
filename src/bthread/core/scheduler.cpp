@@ -293,4 +293,14 @@ void Scheduler::WorkerReady() {
     workers_ready_cv_.notify_one();
 }
 
+// ========== Test Helper Methods ==========
+
+void Scheduler::RegisterIdleWorkerForTest(int worker_id) {
+    RegisterIdleWorker(worker_id);
+}
+
+void Scheduler::ResetIdleRegistryForTest() {
+    idle_head_.store(-1, std::memory_order_release);
+}
+
 } // namespace bthread
