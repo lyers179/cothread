@@ -6,7 +6,7 @@
 #include <coroutine>
 
 #include "bthread/core/task_meta_base.hpp"
-#include "bthread/queue/intrusive_waiter_queue.hpp"
+#include "bthread/queue/mpsc_queue.hpp"  // WaiterQueue uses waiter_next policy
 
 // Forward declarations
 namespace bthread {
@@ -115,7 +115,7 @@ private:
     std::atomic<uint32_t> pending_wake_{0};  // Optimization 3: Prevent duplicate wake
 
     // Intrusive waiter queue for coroutine waiters (zero-allocation)
-    IntrusiveWaiterQueue waiter_queue_;
+    WaiterQueue waiter_queue_;  // Uses waiter_next field via policy
 
     // Native mutex for pthread context
     void* native_mutex_{nullptr};
