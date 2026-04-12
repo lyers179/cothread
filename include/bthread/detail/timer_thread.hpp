@@ -83,6 +83,11 @@ private:
 
     void ProcessShard(TimerShard& shard);  // Process expired timers in one shard
 
+    // Shard-specific heap helpers
+    static void ShardSiftUp(std::vector<TimerEntry*>& heap, size_t idx);
+    static void ShardSiftDown(std::vector<TimerEntry*>& heap, size_t idx);
+    static void ShardPopFromHeap(std::vector<TimerEntry*>& heap);
+
     std::vector<TimerEntry*> heap_;
     std::mutex heap_mutex_;
 
