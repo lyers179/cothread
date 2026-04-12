@@ -4,6 +4,7 @@
 #include <atomic>
 
 #include "bthread/queue/mpsc_queue.hpp"
+#include "bthread/pool/object_pool.hpp"
 #include "bthread/platform/platform.h"
 
 namespace bthread {
@@ -42,10 +43,12 @@ private:
     // Internal wrapper structure for MpscQueue (intrusive queue requires `next` member)
     struct TaskWrapper {
         Task task;
-        std::atomic<TaskWrapper*> next{nullptr};
+        std::atomic<TaskWrapper*> next{nullptr};      // MpscQueue linkage
+        std::atomic<TaskWrapper*> pool_next{nullptr}; // ObjectPool linkage (mutually exclusive with queue)
     };
 
     MpscQueue<TaskWrapper> queue_;  // Lock-free MPSC queue
+    ObjectPool<TaskWrapper> pool_{64};  // Object pool for TaskWrapper
     std::atomic<bool> stopped_{false};
     std::atomic<bool> pending_{false};
 };

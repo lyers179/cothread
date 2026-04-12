@@ -28,7 +28,7 @@ bool ExecutionQueue::ExecuteOne() {
     }
 
     Task task = std::move(wrapper->task);
-    delete wrapper;
+    pool_.Release(wrapper);  // Return to pool instead of delete
 
     if (task) {
         task();
@@ -52,8 +52,8 @@ void ExecutionQueue::Submit(Task task) {
         return;
     }
 
-    // Create wrapper and push to MpscQueue (lock-free, multi-producer)
-    TaskWrapper* wrapper = new TaskWrapper();
+    // Acquire wrapper from pool and push to MpscQueue (lock-free, multi-producer)
+    TaskWrapper* wrapper = pool_.Acquire();
     wrapper->task = std::move(task);
 
     queue_.Push(wrapper);
