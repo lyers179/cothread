@@ -190,9 +190,15 @@ void Worker::RunCoroutine(coro::CoroutineMeta* meta) {
 int Worker::YieldCurrent() {
     if (!current_task_) return EINVAL;
 
-    current_task_->state.store(TaskState::READY, std::memory_order_release);
+    // Fast path: No contention - skip suspend/resume cycle entirely
+    // When no other tasks are waiting, yielding is a no-op
+    if (batch_count_ == 0 && local_queue_.Empty()) {
+        // No other tasks pending - yield is effectively a no-op
+        return 0;
+    }
 
-    // Add to batch instead of queue
+    // Normal path: enqueue to batch/local_queue
+    current_task_->state.store(TaskState::READY, std::memory_order_release);
     local_batch_[batch_count_++] = current_task_;
 
     // Flush if batch is full
