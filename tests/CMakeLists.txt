@@ -56,6 +56,11 @@ add_executable(butex_lazy_test butex_lazy_test.cpp)
 target_link_libraries(butex_lazy_test bthread gtest gtest_main pthread)
 add_test(NAME ButexLazyTest COMMAND butex_lazy_test)
 
+# Sharded queue test (requires gtest and pthread)
+add_executable(sharded_queue_test sharded_queue_test.cpp)
+target_link_libraries(sharded_queue_test bthread gtest gtest_main pthread)
+add_test(NAME ShardedQueueTest COMMAND sharded_queue_test)
+
 # Sync tests
 add_subdirectory(sync)
 
