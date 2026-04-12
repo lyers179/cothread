@@ -55,6 +55,7 @@ public:
 
 private:
     std::atomic<int> round_robin_{0};
+    std::atomic<int32_t> total_count_{0};  // Optimization 1: O(1) Empty check
     int worker_count_{0};
     MpscQueue<TaskMetaBase> shards_[MAX_SHARDS];
 };

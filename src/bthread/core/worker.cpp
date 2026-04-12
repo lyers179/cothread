@@ -234,23 +234,17 @@ TaskMetaBase* Worker::PickTask() {
     TaskMetaBase* task = Scheduler::Instance().PopGlobal(id_);
     if (task) return task;
 
-    // 4. Try work stealing
+    // 4. Try work stealing (Optimization 2: cache-friendly sequential traversal)
     int32_t wc = Scheduler::Instance().worker_count();
     if (wc <= 1) return nullptr;
 
-    // Use lightweight XOR shift RNG instead of mt19937
-    // Faster and sufficient for work stealing randomization
-    static thread_local uint32_t rng_state = static_cast<uint32_t>(
-        std::hash<std::thread::id>{}(std::this_thread::get_id()) ^ 0x2654435761u);
+    // Sequential traversal from adjacent worker - better cache locality
+    // Each worker starts from (id + 1) to distribute steal targets
+    int start = (id_ + 1) % wc;
+    int attempts = wc * 2;  // Reduced attempts (sequential is more efficient)
 
-    int attempts = wc * 3;
     for (int i = 0; i < attempts; ++i) {
-        // XOR shift - fast random number generation
-        rng_state ^= rng_state << 13;
-        rng_state ^= rng_state >> 17;
-        rng_state ^= rng_state << 5;
-
-        int victim = rng_state % wc;
+        int victim = (start + i) % wc;  // Sequential order, not random
         if (victim == id_) continue;
 
         Worker* other = Scheduler::Instance().GetWorker(victim);

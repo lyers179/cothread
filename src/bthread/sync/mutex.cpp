@@ -177,7 +177,6 @@ void Mutex::unlock() {
         return;
     }
 
-    // Called from bthread
     // Check for coroutine waiters first
     TaskMetaBase* waiter = dequeue_waiter();
 
@@ -190,16 +189,29 @@ void Mutex::unlock() {
         return;
     }
 
+    // Optimization 3: Check pending_wake to prevent duplicate wake
+    if (pending_wake_.load(std::memory_order_acquire) > 0) {
+        // Another thread is already waking, just clear LOCKED
+        state_.fetch_and(~LOCKED, std::memory_order_release);
+        return;
+    }
+
     // Check if there are bthread waiters
     uint32_t old_state = state_.fetch_and(~LOCKED, std::memory_order_release);
 
     if (old_state & HAS_WAITERS) {
+        // Mark wake in progress
+        pending_wake_.fetch_add(1, std::memory_order_release);
+
         // Wake one bthread waiter via butex
         Butex* butex = static_cast<Butex*>(butex_.load(std::memory_order_acquire));
         if (butex) {
             butex->set_value(butex->value() + 1);
             butex->Wake(1);
         }
+
+        // Clear wake marker
+        pending_wake_.fetch_sub(1, std::memory_order_release);
     }
 }
 

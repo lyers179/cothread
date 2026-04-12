@@ -112,6 +112,7 @@ private:
     static constexpr uint32_t HAS_WAITERS = 2;
 
     std::atomic<uint32_t> state_{0};
+    std::atomic<uint32_t> pending_wake_{0};  // Optimization 3: Prevent duplicate wake
 
     // Lock-free waiter queue for coroutine waiters (Optimization 2)
     struct MutexWaiterNode {
