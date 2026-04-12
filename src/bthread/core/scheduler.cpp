@@ -238,6 +238,14 @@ TimerThread* Scheduler::GetTimerThread() {
         std::lock_guard<std::mutex> lock(timer_mutex_);
         if (!timer_thread_) {
             timer_thread_ = std::make_unique<TimerThread>();
+            // Initialize with worker count before starting
+            // Use configured_count_ if available, otherwise use actual worker_count_
+            int wc = configured_count_ > 0 ? configured_count_ : worker_count_.load(std::memory_order_acquire);
+            if (wc <= 0) {
+                wc = std::thread::hardware_concurrency();
+                if (wc == 0) wc = 4;
+            }
+            timer_thread_->Init(wc);
             timer_thread_->Start();
         }
     });

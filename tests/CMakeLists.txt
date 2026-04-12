@@ -9,6 +9,7 @@ set(TEST_SOURCES
     mutex_test.cpp
     cond_test.cpp
     timer_test.cpp
+    timer_shard_test.cpp
     context_test.cpp
     scheduler_test.cpp
     wake_test.cpp

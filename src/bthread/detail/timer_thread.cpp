@@ -202,7 +202,7 @@ void TimerThread::TimerThreadMain() {
 void TimerThread::ProcessShard(TimerShard& shard) {
     int64_t now_us = platform::GetTimeOfDayUs();
 
-    std::lock_guard<std::mutex> lock(shard.mutex);
+    std::unique_lock<std::mutex> lock(shard.mutex);
 
     while (!shard.heap.empty() && shard.heap[0]->deadline_us <= now_us) {
         TimerEntry* entry = shard.heap[0];

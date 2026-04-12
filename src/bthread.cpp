@@ -222,11 +222,12 @@ bthread_timer_t bthread_timer_add(void (*callback)(void*), void* arg,
 
     Scheduler::Instance().Init();
 
-    uint64_t delay_us = static_cast<uint64_t>(delay->tv_sec) * US_PER_SEC +
-                       delay->tv_nsec / NS_PER_US;
-
-    platform::timespec ts = ToAbsoluteTimeout(delay_us);
-    return Scheduler::Instance().GetTimerThread()->Schedule(callback, arg, &ts);
+    // Pass the relative delay directly to Schedule (not absolute timeout)
+    // Schedule() will convert it to deadline internally
+    platform::timespec rel_delay;
+    rel_delay.tv_sec = delay->tv_sec;
+    rel_delay.tv_nsec = delay->tv_nsec;
+    return Scheduler::Instance().GetTimerThread()->Schedule(callback, arg, &rel_delay);
 }
 
 int bthread_timer_cancel(bthread_timer_t timer_id) {
