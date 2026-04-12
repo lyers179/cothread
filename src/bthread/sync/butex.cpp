@@ -11,6 +11,14 @@ namespace bthread {
 
 using namespace bthread::platform;
 
+// Offset of mpmc_node in TaskMeta for container_of conversion
+static constexpr size_t kMpmcNodeOffset = offsetof(TaskMeta, mpmc_node);
+
+// Helper to convert MpmcNode* to TaskMeta*
+static inline TaskMeta* NodeToTaskMeta(MpmcNode* node) {
+    return NodeToParent<TaskMeta>(node, kMpmcNodeOffset);
+}
+
 Butex::Butex() = default;
 Butex::~Butex() = default;
 
@@ -30,7 +38,7 @@ void Butex::TimeoutCallback(void* arg) {
             // Remove from queue first
             Butex* butex = static_cast<Butex*>(task->waiting_butex);
             if (butex) {
-                butex->queue().RemoveFromWaitQueue(task);
+                butex->queue().Remove(&task->mpmc_node, &task->is_waiting);
             }
 
             task->state.store(TaskState::READY, std::memory_order_release);
@@ -77,7 +85,7 @@ int Butex::Wait(int expected_value, const platform::timespec* timeout, bool prep
     }
 
     // 3. Prepare waiter node
-    ButexWaiterNode* node = &task->butex_waiter_node;
+    MpmcNode* node = &task->mpmc_node;
     node->next.store(nullptr, std::memory_order_relaxed);
     node->claimed.store(false, std::memory_order_relaxed);
 
@@ -104,9 +112,11 @@ int Butex::Wait(int expected_value, const platform::timespec* timeout, bool prep
 
     // 7. Add to queue (lock-free MPSC)
     if (prepend) {
-        queue_.AddToHead(task);
+        // Cast state to uint8_t* since TaskState is enum class : uint8_t
+        queue_.AddToHead(node, &task->is_waiting,
+            reinterpret_cast<std::atomic<uint8_t>*>(&task->state));
     } else {
-        queue_.AddToTail(task);
+        queue_.AddToTail(node, &task->is_waiting);
     }
 
     // 7.5. Re-check value AFTER adding to queue to catch concurrent Wake
@@ -177,16 +187,17 @@ void Butex::Wake(int count) {
     // Use a fixed-size stack array to avoid dynamic allocation
     // Most Wake calls are for small counts (1 or a few waiters)
     constexpr int BATCH_SIZE = 16;
-    TaskMeta* tasks[BATCH_SIZE];
+    MpmcNode* nodes[BATCH_SIZE];
 
     int total_woken = 0;
     while (total_woken < count) {
         // Batch pop to reduce CAS overhead
-        int batch_count = queue_.PopMultipleFromHead(tasks, std::min(count - total_woken, BATCH_SIZE));
+        int batch_count = queue_.PopMultipleFromHead(nodes, std::min(count - total_woken, BATCH_SIZE));
         if (batch_count == 0) break;
 
         for (int i = 0; i < batch_count; ++i) {
-            TaskMeta* waiter = tasks[i];
+            // Convert MpmcNode* to TaskMeta*
+            TaskMeta* waiter = NodeToTaskMeta(nodes[i]);
 
             // Mark as not waiting - this tells Wait that we're handling it
             waiter->is_waiting.store(false, std::memory_order_release);

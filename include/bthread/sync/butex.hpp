@@ -3,7 +3,7 @@
 #include <atomic>
 #include <cstdint>
 
-#include "bthread/sync/butex_queue.hpp"
+#include "bthread/queue/mpmc_queue.hpp"
 #include "bthread/platform/platform.h"
 
 namespace bthread {
@@ -36,10 +36,10 @@ public:
     void set_value(int v) { value_.store(v, std::memory_order_release); }
 
     // Expose queue for timeout callback (internal use)
-    ButexQueue& queue() { return queue_; }
+    ButexWaiterQueue& queue() { return queue_; }
 
 private:
-    ButexQueue queue_;           // Lock-free MPMC queue for waiters
+    ButexWaiterQueue queue_;           // Lock-free MPMC queue for waiters
     std::atomic<int> value_{0};  // Current value
 
     // Timeout callback

@@ -6,6 +6,7 @@
 #include <cstddef>
 
 #include "bthread/core/task_meta_base.hpp"
+#include "bthread/queue/mpmc_queue.hpp"
 #include "bthread/platform/platform.h"
 
 namespace bthread {
@@ -13,12 +14,6 @@ namespace bthread {
 // Forward declarations
 class Worker;
 struct TaskMeta;  // Forward declare for WaiterState
-
-// ButexWaiterNode - lock-free queue node for Butex (inline in TaskMeta)
-struct ButexWaiterNode {
-    std::atomic<ButexWaiterNode*> next{nullptr};
-    std::atomic<bool> claimed{false};  // Prevents double consumption
-};
 
 // bthread handle type (legacy compatibility)
 using bthread_t = uint64_t;
@@ -66,7 +61,7 @@ struct TaskMeta : TaskMetaBase {
     // ========== Group 3: Synchronization (WARM) ==========
     void* waiting_butex{nullptr};  ///< Butex pointer if waiting on one
     WaiterState waiter;
-    ButexWaiterNode butex_waiter_node;  // Inline node, no dynamic alloc
+    MpmcNode mpmc_node;  // Inline node for MPMC queue, no dynamic alloc
 
     // ========== Group 4: Entry Function and Result (COLD) ==========
     void* (*fn)(void*){nullptr};
