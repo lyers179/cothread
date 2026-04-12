@@ -48,7 +48,23 @@ public:
         return running_.load(std::memory_order_acquire);
     }
 
+    /// Initialize shards for worker count
+    void Init(int worker_count);
+
 private:
+    // ========== Timer Sharding (Optimization 4) ==========
+    static constexpr int MAX_SHARDS = 256;
+
+    struct TimerShard {
+        std::mutex mutex;                       // Per-shard lock
+        std::vector<TimerEntry*> heap;          // Min-heap for this shard
+        std::atomic<int64_t> next_deadline{INT64_MAX};  // Earliest deadline in shard
+    };
+
+    TimerShard shards_[MAX_SHARDS];
+    std::atomic<int> shard_assign_{0};          // Round-robin shard assignment
+    int worker_count_{0};                        // Number of shards to use
+
     // Timer thread main loop
     void TimerThreadMain();
 
@@ -64,6 +80,8 @@ private:
     // Heap operations
     void SiftDown(size_t idx);
     void SiftUp(size_t idx);
+
+    void ProcessShard(TimerShard& shard);  // Process expired timers in one shard
 
     std::vector<TimerEntry*> heap_;
     std::mutex heap_mutex_;
