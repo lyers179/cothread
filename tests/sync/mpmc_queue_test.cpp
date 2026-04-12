@@ -11,18 +11,10 @@
 
 using namespace bthread;
 
-// Offset for container_of conversion
-static constexpr size_t kMpmcNodeOffset = offsetof(TaskMeta, mpmc_node);
-
-// Helper to convert MpmcNode* to TaskMeta*
-static inline TaskMeta* NodeToTaskMeta(MpmcNode* node) {
-    return NodeToParent<TaskMeta>(node, kMpmcNodeOffset);
-}
-
 void test_mpmc_concurrent_pop() {
     printf("Test: MPMC Concurrent Pop\n");
 
-    MpmcQueue queue;
+    ButexWaiterQueue queue;
     std::atomic<int> popped_count{0};
     std::atomic<bool> done{false};
     std::atomic<bool> start{false};
@@ -31,8 +23,7 @@ void test_mpmc_concurrent_pop() {
     std::vector<TaskMeta> tasks(100);
     for (auto& t : tasks) {
         t.is_waiting.store(true, std::memory_order_relaxed);
-        t.mpmc_node.claimed.store(false, std::memory_order_relaxed);
-        queue.AddToTail(&t.mpmc_node, &t.is_waiting);
+        queue.AddToTail(&t, &t.is_waiting);
     }
 
     // Launch 4 consumer threads
@@ -45,8 +36,8 @@ void test_mpmc_concurrent_pop() {
             }
 
             while (!done.load(std::memory_order_acquire)) {
-                MpmcNode* node = queue.PopFromHead();
-                if (node) {
+                TaskMeta* task = queue.PopFromHead();
+                if (task) {
                     popped_count.fetch_add(1, std::memory_order_relaxed);
                 }
                 if (popped_count.load(std::memory_order_acquire) >= 100) {
@@ -70,7 +61,7 @@ void test_mpmc_concurrent_pop() {
 void test_mpmc_interleaved_push_pop() {
     printf("\nTest: MPMC Interleaved Push and Pop\n");
 
-    MpmcQueue queue;
+    ButexWaiterQueue queue;
     std::atomic<int> pushed_count{0};
     std::atomic<int> popped_count{0};
     std::atomic<bool> done{false};
@@ -96,8 +87,7 @@ void test_mpmc_interleaved_push_pop() {
             for (int j = 0; j < count; ++j) {
                 TaskMeta& t = tasks[base + j];
                 t.is_waiting.store(true, std::memory_order_relaxed);
-                t.mpmc_node.claimed.store(false, std::memory_order_relaxed);
-                queue.AddToTail(&t.mpmc_node, &t.is_waiting);
+                queue.AddToTail(&t, &t.is_waiting);
                 pushed_count.fetch_add(1, std::memory_order_relaxed);
             }
         });
@@ -112,8 +102,8 @@ void test_mpmc_interleaved_push_pop() {
             }
 
             while (!done.load(std::memory_order_acquire)) {
-                MpmcNode* node = queue.PopFromHead();
-                if (node) {
+                TaskMeta* task = queue.PopFromHead();
+                if (task) {
                     popped_count.fetch_add(1, std::memory_order_relaxed);
                 }
                 // Check if all tasks have been pushed and popped
@@ -152,7 +142,7 @@ void test_mpmc_interleaved_push_pop() {
 void test_mpmc_no_double_pop() {
     printf("\nTest: MPMC No Double Pop\n");
 
-    MpmcQueue queue;
+    ButexWaiterQueue queue;
     std::atomic<int> popped_count{0};
     std::vector<std::atomic<bool>> popped_tasks(100);
     for (auto& p : popped_tasks) {
@@ -166,10 +156,9 @@ void test_mpmc_no_double_pop() {
     std::vector<TaskMeta> tasks(100);
     for (int i = 0; i < 100; ++i) {
         tasks[i].is_waiting.store(true, std::memory_order_relaxed);
-        tasks[i].mpmc_node.claimed.store(false, std::memory_order_relaxed);
         // Store index in the task for tracking
         tasks[i].ref_count.store(i, std::memory_order_relaxed);  // Reuse ref_count as index
-        queue.AddToTail(&tasks[i].mpmc_node, &tasks[i].is_waiting);
+        queue.AddToTail(&tasks[i], &tasks[i].is_waiting);
     }
 
     // Consumer threads
@@ -181,10 +170,9 @@ void test_mpmc_no_double_pop() {
             }
 
             while (!done.load(std::memory_order_acquire)) {
-                MpmcNode* node = queue.PopFromHead();
-                if (node) {
-                    TaskMeta* t = NodeToTaskMeta(node);
-                    int idx = t->ref_count.load(std::memory_order_relaxed);
+                TaskMeta* task = queue.PopFromHead();
+                if (task) {
+                    int idx = task->ref_count.load(std::memory_order_relaxed);
                     // Check if this task was already popped
                     bool expected = false;
                     if (popped_tasks[idx].compare_exchange_strong(expected, true,
@@ -345,15 +333,13 @@ void test_pop_no_timeout_when_nonempty() {
     // or are being added to the queue. The bug was: timeout returns nullptr even
     // when queue has nodes, causing Wake to miss waiters.
 
-    MpmcQueue queue;
+    ButexWaiterQueue queue;
     std::atomic<bool> pop_started{false};
     std::atomic<bool> node_added{false};
-    std::atomic<MpmcNode*> popped{nullptr};
+    std::atomic<TaskMeta*> popped{nullptr};
 
     TaskMeta task;
     task.is_waiting.store(true, std::memory_order_relaxed);
-    task.mpmc_node.claimed.store(false, std::memory_order_relaxed);
-    task.mpmc_node.next.store(nullptr, std::memory_order_relaxed);
 
     std::thread popper([&] {
         pop_started.store(true);
@@ -362,7 +348,7 @@ void test_pop_no_timeout_when_nonempty() {
             std::this_thread::yield();
         }
         // PopFromHead should return the task, not nullptr
-        MpmcNode* result = queue.PopFromHead();
+        TaskMeta* result = queue.PopFromHead();
         popped.store(result);
     });
 
@@ -375,14 +361,14 @@ void test_pop_no_timeout_when_nonempty() {
     usleep(1000);  // 1ms
 
     // Add task to queue
-    queue.AddToTail(&task.mpmc_node, &task.is_waiting);
+    queue.AddToTail(&task, &task.is_waiting);
     node_added.store(true);
 
     popper.join();
 
-    MpmcNode* result = popped.load();
-    printf("  Expected node ptr: %p, Got: %p\n", (void*)&task.mpmc_node, (void*)result);
-    assert(result == &task.mpmc_node && "PopFromHead should not return nullptr when queue has nodes");
+    TaskMeta* result = popped.load();
+    printf("  Expected task ptr: %p, Got: %p\n", (void*)&task, (void*)result);
+    assert(result == &task && "PopFromHead should not return nullptr when queue has nodes");
     printf("  PASSED: PopFromHead returns task when queue nonempty\n");
 }
 
