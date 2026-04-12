@@ -27,10 +27,9 @@ Mutex::Mutex() {
 }
 
 Mutex::~Mutex() {
-    // Assert no waiters
-    std::lock_guard<std::mutex> lock(waiters_mutex_);
-    if (waiter_head_ != nullptr) {
-        // Leak waiters rather than crash - should not happen in correct code
+    // Drain remaining waiters from lock-free queue
+    while (MutexWaiterNode* node = waiter_queue_.Pop()) {
+        delete node;
     }
 
     if (butex_) {
@@ -224,24 +223,13 @@ void Mutex::unlock_pthread() {
 }
 
 void Mutex::enqueue_waiter(TaskMetaBase* task) {
-    std::lock_guard<std::mutex> lock(waiters_mutex_);
-    MutexWaiterNode* node = new MutexWaiterNode{task, nullptr};
-    if (waiter_tail_) {
-        waiter_tail_->next = node;
-        waiter_tail_ = node;
-    } else {
-        waiter_head_ = waiter_tail_ = node;
-    }
+    MutexWaiterNode* node = new MutexWaiterNode{task};
+    waiter_queue_.Push(node);  // Lock-free push
 }
 
 TaskMetaBase* Mutex::dequeue_waiter() {
-    std::lock_guard<std::mutex> lock(waiters_mutex_);
-    if (!waiter_head_) return nullptr;
-
-    MutexWaiterNode* node = waiter_head_;
-    waiter_head_ = node->next;
-    if (!waiter_head_) waiter_tail_ = nullptr;
-
+    MutexWaiterNode* node = waiter_queue_.Pop();  // Lock-free pop
+    if (!node) return nullptr;
     TaskMetaBase* task = node->task;
     delete node;
     return task;
