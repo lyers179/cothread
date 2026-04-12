@@ -224,8 +224,8 @@ TaskMetaBase* Worker::PickTask() {
         return local_batch_[--batch_count_];
     }
 
-    // 3. Try global queue
-    TaskMetaBase* task = Scheduler::Instance().global_queue().Pop();
+    // 3. Try global queue (sharded)
+    TaskMetaBase* task = Scheduler::Instance().PopGlobal(id_);
     if (task) return task;
 
     // 4. Try work stealing

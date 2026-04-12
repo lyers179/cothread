@@ -42,6 +42,7 @@ void Scheduler::Init() {
 
         StartWorkers(n);
         GetTaskGroup().set_worker_count(n);
+        global_queue_.Init(n);
 
         // Wait for all workers to be ready before returning
         {
@@ -291,6 +292,10 @@ void Scheduler::WorkerReady() {
     // Notify on every increment (simple but slightly inefficient)
     // Could optimize to only notify when reaching expected count
     workers_ready_cv_.notify_one();
+}
+
+TaskMetaBase* Scheduler::PopGlobal(int worker_id) {
+    return global_queue_.Pop(worker_id);
 }
 
 // ========== Test Helper Methods ==========
