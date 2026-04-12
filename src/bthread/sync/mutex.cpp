@@ -27,10 +27,7 @@ Mutex::Mutex() {
 }
 
 Mutex::~Mutex() {
-    // Drain remaining waiters from lock-free queue
-    while (MutexWaiterNode* node = waiter_queue_.Pop()) {
-        delete node;
-    }
+    // IntrusiveWaiterQueue - no dynamic allocation, no cleanup needed
 
     if (butex_) {
         delete static_cast<Butex*>(butex_.load(std::memory_order_relaxed));
@@ -235,16 +232,11 @@ void Mutex::unlock_pthread() {
 }
 
 void Mutex::enqueue_waiter(TaskMetaBase* task) {
-    MutexWaiterNode* node = new MutexWaiterNode{task};
-    waiter_queue_.Push(node);  // Lock-free push
+    waiter_queue_.Push(task);  // Direct push, no allocation
 }
 
 TaskMetaBase* Mutex::dequeue_waiter() {
-    MutexWaiterNode* node = waiter_queue_.Pop();  // Lock-free pop
-    if (!node) return nullptr;
-    TaskMetaBase* task = node->task;
-    delete node;
-    return task;
+    return waiter_queue_.Pop();  // Direct pop, no allocation
 }
 
 // ========== LockAwaiter Implementation ==========
