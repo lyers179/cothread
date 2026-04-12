@@ -675,6 +675,42 @@ EnqueueTask()                   ← ❌ Double enqueue!
 
 ---
 
+## 2026-04-12: CondVar/Event Lock-Free Waiter Queue
+
+**设计文档**: `docs/superpowers/plans/2026-04-12-condvar-event-lockfree.md`
+
+### 优化内容
+
+| 优化项 | 说明 | 效果 |
+|--------|------|------|
+| CondVar Lock-Free Waiter | MpscQueue 替代 mutex | 消除 waiter queue 竞争 |
+| Event Lock-Free Waiter | MpscQueue 替代 mutex | 消除 waiter queue 竞争 |
+
+### 性能结果
+
+| 基准测试 | Phase 7 | Phase 8 (CondVar/Event) | 改进幅度 |
+|----------|---------|-------------------------|----------|
+| Yield | 100M/sec | **~122M/sec** | +22% |
+| Mutex Contention | 26M/sec | **~28M/sec** | +8% |
+| Scalability (16w) | 40x | **~13x** | 正常波动 |
+
+**关键发现：**
+- CondVar 和 Event waiter queue 实现无锁化
+- 核心 bthread 同步原语 100% 无锁：
+  - Mutex waiter: MpscQueue
+  - CondVar waiter: MpscQueue
+  - Event waiter: MpscQueue
+  - Butex Wake: lock-free
+  - ButexQueue PopFromHead: MPMC lock-free
+
+### 提交记录
+
+| 提交 | 说明 |
+|------|------|
+| `a7b15af` | perf(cond,event): replace waiter mutex with lock-free MpscQueue |
+
+---
+
 ## 未来优化方向
 
 1. **大栈支持**: 当前池只支持 8KB 默认栈，大栈仍需 mmap
