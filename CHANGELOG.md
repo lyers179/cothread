@@ -11,18 +11,109 @@
 ### Added
 - 无
 
+---
+
+## [2026-04-12] - Phase 6 Comprehensive Performance Optimization
+
+### Added
+
+#### Idle Worker Registry (Optimization 1)
+- Lock-free Treiber stack for tracking idle workers
+- `RegisterIdleWorker()`: workers register before futex wait
+- `PopIdleWorker()`: scheduler pops only N idle workers (not ALL)
+- Selective wake reduces unnecessary futex syscalls
+- **Files**: `include/bthread/core/scheduler.hpp`, `src/bthread/core/scheduler.cpp`, `src/bthread/core/worker.cpp`
+
+#### Mutex Lock-Free Waiter Queue (Optimization 2)
+- Replace `std::mutex` waiter protection with `MpscQueue`
+- `MutexWaiterNode` uses `std::atomic<MutexWaiterNode*> next` for lock-free queue
+- Eliminates mutex contention on coroutine waiter operations
+- **Files**: `include/bthread/sync/mutex.hpp`, `src/bthread/sync/mutex.cpp`
+
+#### Sharded Global Queue (Optimization 3)
+- `ShardedGlobalQueue` class with per-worker shards
+- Round-robin Push distribution
+- Pop: own shard first (fast), then steal from others (slow)
+- MPMC queue allows concurrent Pop from multiple workers
+- **Files**: `include/bthread/queue/sharded_queue.hpp`, `src/bthread/queue/sharded_queue.cpp`
+
+#### Timer Sharding (Optimization 4)
+- `TimerShard` struct with per-shard mutex and heap
+- Round-robin timer assignment reduces contention
+- Atomic `next_deadline` for quick expiry checking
+- **Files**: `include/bthread/detail/timer_thread.hpp`, `src/bthread/detail/timer_thread.cpp`
+
+#### Yield Fast Path (Optimization 5)
+- Skip queue operations when no contention (`batch_count_==0 && local_queue_.Empty()`)
+- Direct return without suspend/resume cycle
+- Massive yield throughput improvement
+- **Files**: `src/bthread/core/worker.cpp`
+
 ### Changed
 - ButexQueue: MPSC → MPMC, PopFromHead 改用 CAS retry 实现多消费者安全
 - Butex::Wake: 移除 wake_mutex_，实现无锁唤醒
 - ExecutionQueue: 改用 MpscQueue，实现无锁任务提交
+- Worker::YieldCurrent: Added fast path for no-contention case
 
 ### Performance
-- Concurrent Wake contention eliminated (多线程并发唤醒无锁竞争)
-- ExecutionQueue Submit latency reduced (任务提交延迟降低)
-- Mutex Contention latency: 0.09 µs/op
+
+| Metric | Phase 5+ | Phase 6 | Improvement |
+|--------|----------|---------|-------------|
+| Yield | 8M/sec | **79M/sec** | +888% |
+| Mutex Contention | 12M/sec | **23M/sec** | +92% |
+| Scalability (8w) | 5.6x | **12x** | +114% |
+| vs std::thread | 5x faster | **11.5x faster** | +130% |
+
+**Cumulative improvement: bthread from "6.92x slower than std::thread" → "11.5x faster" (~80x total)**
 
 ### Fixed
-- 无
+
+#### Timer Initialization Bug
+- **问题**: `GetTimerThread()` 调用 `Start()` 在 `Init()` 之前，导致 `worker_count_=0`
+- **修复**: 先调用 `Init(worker_count)` 再调用 `Start()`
+
+#### Timer Delay Calculation Bug
+- **问题**: `bthread_timer_add()` 双重转换相对延迟为绝对时间
+- **修复**: 正确传递相对延迟给 `Schedule()`
+
+#### ProcessShard Lock Type Bug
+- **问题**: 使用 `std::lock_guard` 但尝试手动 `unlock()`/`lock()` 操作
+- **修复**: 改用 `std::unique_lock` 支持手动操作
+
+---
+
+## [2026-04-11] - Phase 5 Pause/Yield + Wake Store Optimization
+
+### Added
+
+#### Pause/Yield Adaptive Spin
+- MpscQueue Pop() 使用 CPU pause 指令替代立即 yield
+- `MAX_PAUSE_SPINS = 100`, `MAX_YIELD_SPINS = 10`
+- 减少上下文切换开销
+- **Files**: `include/bthread/queue/mpsc_queue.hpp`, `src/bthread/sync/butex_queue.cpp`
+
+#### Wake Store Optimization
+- Wake 使用直接 store 替代 CAS 设置 READY 状态
+- Wait 保留 CAS 保护防止双重入队
+- 不对称设计：Wake 快（store），Wait 安全（CAS）
+- **Files**: `src/bthread/sync/butex.cpp`
+
+### Changed
+- Butex::Wake: CAS → direct store (2-3x faster)
+- ButexQueue: pause instruction for spin loops
+- Memory ordering: seq_cst → acquire where sufficient
+
+### Fixed
+
+#### PopFromHead Timeout Bug
+- **问题**: 队列非空时 timeout 返回 nullptr，导致 Wake 错误认为队列空
+- **修复**: 只在队列真正空时 (!head && !tail) 返回 nullptr
+- **文件**: `src/bthread/sync/butex_queue.cpp`
+
+#### Tail Race Condition
+- **问题**: claimed-node 分支使用 store 而非 CAS
+- **修复**: 改用 CAS 更新 tail
+- **文件**: `src/bthread/sync/butex_queue.cpp`
 
 ---
 

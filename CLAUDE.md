@@ -30,7 +30,7 @@ docs/
 ├── performance_history.md    # 性能优化历史（按时间线）
 ├── performance_optimization.md # 当前优化详情
 ├── ARCHITECTURE.md       # 整体架构说明
-├── BUGFIX_STUCK_ISSUE.md # Bug 修复记录
+├── BUGFIX_ISSUE.md        # Bug 修复记录
 └── README.md             # 文档索引
 ```
 
@@ -41,7 +41,7 @@ docs/
 | 设计规范 | `YYYY-MM-DD-主题-design.md` | `2026-04-09-allocation-optimization-design.md` |
 | 实现计划 | `YYYY-MM-DD-主题.md` | `2026-04-09-allocation-optimization.md` |
 | 性能文档 | `performance_*.md` | `performance_history.md` |
-| Bug 修复 | `BUGFIX_*.md` | `BUGFIX_STUCK_ISSUE.md` |
+| Bug 修复 | `BUGFIX_*.md` | `BUGFIX_ISSUE.md` |
 
 ### 文档内容规范
 
