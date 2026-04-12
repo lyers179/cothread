@@ -49,6 +49,7 @@ namespace bthread {
  * - Use coro::co_spawn() for coroutine tasks
  */
 class Scheduler {
+    friend class Worker;  // Allow Worker to call RegisterIdleWorker
 public:
     /// Get singleton instance
     static Scheduler& Instance();

@@ -314,6 +314,9 @@ void Worker::WaitForTask() {
 
         is_idle_.store(true, std::memory_order_seq_cst);
 
+        // Register this worker as idle before futex wait
+        Scheduler::Instance().RegisterIdleWorker(id_);
+
         // Capture current generation with seq_cst
         int expected = wake_count_.load(std::memory_order_seq_cst);
 
