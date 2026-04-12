@@ -2,10 +2,10 @@
 #include <memory>
 #include <thread>
 #include <vector>
-#include "bthread/queue/intrusive_waiter_queue.hpp"
+#include "bthread/queue/mpsc_queue.hpp"
 #include "bthread/core/task_meta_base.hpp"
 
-using bthread::IntrusiveWaiterQueue;
+using bthread::WaiterQueue;
 using bthread::TaskMetaBase;
 using bthread::TaskState;
 
@@ -17,8 +17,8 @@ struct TestTask : TaskMetaBase {
     void resume() override {}
 };
 
-TEST(IntrusiveWaiterQueueTest, SinglePushPop) {
-    IntrusiveWaiterQueue queue;
+TEST(WaiterQueueTest, SinglePushPop) {
+    WaiterQueue queue;
     TestTask task;
 
     EXPECT_TRUE(queue.Empty());
@@ -31,8 +31,8 @@ TEST(IntrusiveWaiterQueueTest, SinglePushPop) {
     EXPECT_TRUE(queue.Empty());
 }
 
-TEST(IntrusiveWaiterQueueTest, MultiplePushPopFIFO) {
-    IntrusiveWaiterQueue queue;
+TEST(WaiterQueueTest, MultiplePushPopFIFO) {
+    WaiterQueue queue;
     std::vector<std::unique_ptr<TestTask>> tasks;
 
     // Create tasks
@@ -53,8 +53,8 @@ TEST(IntrusiveWaiterQueueTest, MultiplePushPopFIFO) {
     EXPECT_TRUE(queue.Empty());
 }
 
-TEST(IntrusiveWaiterQueueTest, MultiProducerSingleConsumer) {
-    IntrusiveWaiterQueue queue;
+TEST(WaiterQueueTest, MultiProducerSingleConsumer) {
+    WaiterQueue queue;
     constexpr int NUM_PRODUCERS = 4;
     constexpr int TASKS_PER_PRODUCER = 100;
     std::vector<std::vector<std::unique_ptr<TestTask>>> producer_tasks(NUM_PRODUCERS);
@@ -105,8 +105,8 @@ TEST(IntrusiveWaiterQueueTest, MultiProducerSingleConsumer) {
     EXPECT_EQ(pop_count.load(), NUM_PRODUCERS * TASKS_PER_PRODUCER);
 }
 
-TEST(IntrusiveWaiterQueueTest, WaiterNextFieldClear) {
-    IntrusiveWaiterQueue queue;
+TEST(WaiterQueueTest, WaiterNextFieldClear) {
+    WaiterQueue queue;
     TestTask task;
 
     queue.Push(&task);
