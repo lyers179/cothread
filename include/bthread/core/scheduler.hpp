@@ -13,7 +13,7 @@
 #include "bthread/core/task_meta.hpp"
 #include "bthread/core/task_group.hpp"
 #include "bthread/core/worker.hpp"
-#include "bthread/queue/sharded_queue.hpp"
+#include "bthread/queue/shared_mpsc_queue.hpp"
 
 // Forward declarations
 namespace bthread {
@@ -80,8 +80,8 @@ public:
     }
 
     /// Get global queue
-    ShardedGlobalQueue& global_queue() { return global_queue_; }
-    const ShardedGlobalQueue& global_queue() const { return global_queue_; }
+    SharedMPSCQueue& global_queue() { return global_queue_; }
+    const SharedMPSCQueue& global_queue() const { return global_queue_; }
 
     /// Pop from global queue for specific worker
     TaskMetaBase* PopGlobal(int worker_id);
@@ -189,7 +189,7 @@ private:
     std::mutex workers_ready_mutex_;
     std::condition_variable workers_ready_cv_;
 
-    ShardedGlobalQueue global_queue_;
+    SharedMPSCQueue global_queue_;
 
     // ========== Idle Worker Registry (Optimization 1) ==========
     // Lock-free linked list of idle workers

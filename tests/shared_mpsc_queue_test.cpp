@@ -2,22 +2,22 @@
 #include <thread>
 #include <vector>
 #include <atomic>
-#include "bthread/queue/sharded_queue.hpp"
+#include "bthread/queue/shared_mpsc_queue.hpp"
 #include "bthread/core/task_meta.hpp"
 
 namespace bthread {
 namespace test {
 
-class ShardedQueueTest : public ::testing::Test {
+class SharedMPSCQueueTest : public ::testing::Test {
 protected:
-    ShardedGlobalQueue queue_;
+    SharedMPSCQueue queue_;
 
     void SetUp() override {
         queue_.Init(4);
     }
 };
 
-TEST_F(ShardedQueueTest, PushPopSingleTask) {
+TEST_F(SharedMPSCQueueTest, PushPopSingleTask) {
     TaskMeta task;
     queue_.Push(&task);
 
@@ -27,7 +27,7 @@ TEST_F(ShardedQueueTest, PushPopSingleTask) {
     EXPECT_TRUE(queue_.Empty());
 }
 
-TEST_F(ShardedQueueTest, RoundRobinDistribution) {
+TEST_F(SharedMPSCQueueTest, RoundRobinDistribution) {
     TaskMeta tasks[8];
 
     for (int i = 0; i < 8; ++i) {
@@ -46,7 +46,7 @@ TEST_F(ShardedQueueTest, RoundRobinDistribution) {
     EXPECT_EQ(total, 8);
 }
 
-TEST_F(ShardedQueueTest, StealFromOtherShard) {
+TEST_F(SharedMPSCQueueTest, StealFromOtherShard) {
     TaskMeta task;
     queue_.Push(&task);
 
@@ -54,7 +54,7 @@ TEST_F(ShardedQueueTest, StealFromOtherShard) {
     EXPECT_EQ(popped, &task);
 }
 
-TEST_F(ShardedQueueTest, ConcurrentPushPop) {
+TEST_F(SharedMPSCQueueTest, ConcurrentPushPop) {
     std::atomic<int> pushed{0};
     std::atomic<int> popped{0};
 

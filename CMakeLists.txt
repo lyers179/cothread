@@ -49,7 +49,7 @@ set(BTHREAD_SOURCES
     src/bthread/core/coro_support.cpp
     src/bthread/queue/work_stealing_queue.cpp
     src/bthread/queue/execution_queue.cpp
-    src/bthread/queue/sharded_queue.cpp
+    src/bthread/queue/shared_mpsc_queue.cpp
     src/bthread/queue/mpmc_queue.cpp
     src/bthread/sync/butex.cpp
     src/bthread/sync/mutex.cpp
@@ -74,7 +74,7 @@ set(BTHREAD_HEADERS
     include/bthread/api.hpp
     include/bthread/queue/mpsc_queue.hpp
     include/bthread/queue/mpmc_queue.hpp
-    include/bthread/queue/sharded_queue.hpp
+    include/bthread/queue/shared_mpsc_queue.hpp
     include/bthread/queue/global_queue.hpp
     include/bthread/queue/work_stealing_queue.hpp
     include/bthread/queue/execution_queue.hpp

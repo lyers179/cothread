@@ -1,12 +1,12 @@
-#include "bthread/queue/sharded_queue.hpp"
+#include "bthread/queue/shared_mpsc_queue.hpp"
 
 namespace bthread {
 
-void ShardedGlobalQueue::Init(int worker_count) {
+void SharedMPSCQueue::Init(int worker_count) {
     worker_count_ = worker_count;
 }
 
-void ShardedGlobalQueue::Push(TaskMetaBase* task) {
+void SharedMPSCQueue::Push(TaskMetaBase* task) {
     // Round-robin distribution to shards
     int shard = round_robin_.fetch_add(1, std::memory_order_relaxed) % worker_count_;
     shards_[shard].Push(task);
@@ -14,7 +14,7 @@ void ShardedGlobalQueue::Push(TaskMetaBase* task) {
     total_count_.fetch_add(1, std::memory_order_release);
 }
 
-TaskMetaBase* ShardedGlobalQueue::Pop(int worker_id) {
+TaskMetaBase* SharedMPSCQueue::Pop(int worker_id) {
     // 1. Try own shard first (fast path)
     if (worker_id >= 0 && worker_id < worker_count_) {
         TaskMetaBase* task = shards_[worker_id].Pop();
@@ -39,7 +39,7 @@ TaskMetaBase* ShardedGlobalQueue::Pop(int worker_id) {
     return nullptr;
 }
 
-bool ShardedGlobalQueue::Empty() const {
+bool SharedMPSCQueue::Empty() const {
     // Optimization 1: O(1) check using atomic counter
     // Note: May have brief inconsistency (task added but Pop returned it)
     // This is acceptable as Empty() is only used for quick checks

@@ -8,25 +8,29 @@
 namespace bthread {
 
 /**
- * @brief Sharded global queue for MPMC task distribution.
+ * @brief Shared MPSC queue for MPMC task distribution.
  *
  * Each worker has its own shard (MpscQueue). Push uses round-robin.
  * Pop tries own shard first, then steals from other shards.
+ *
+ * Naming:
+ * - Shared: multiple workers access it
+ * - MPSC: Multi-Producer Single-Consumer per shard
  *
  * Thread Safety:
  * - Push(): Safe from multiple producer threads (round-robin to shards)
  * - Pop(): Safe from multiple consumer threads (each pops from own shard, steals from others)
  */
-class ShardedGlobalQueue {
+class SharedMPSCQueue {
 public:
     static constexpr int MAX_SHARDS = 256;
 
-    ShardedGlobalQueue() = default;
-    ~ShardedGlobalQueue() = default;
+    SharedMPSCQueue() = default;
+    ~SharedMPSCQueue() = default;
 
     // Disable copy and move
-    ShardedGlobalQueue(const ShardedGlobalQueue&) = delete;
-    ShardedGlobalQueue& operator=(const ShardedGlobalQueue&) = delete;
+    SharedMPSCQueue(const SharedMPSCQueue&) = delete;
+    SharedMPSCQueue& operator=(const SharedMPSCQueue&) = delete;
 
     /**
      * @brief Initialize shards for worker count.
