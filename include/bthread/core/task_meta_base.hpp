@@ -47,6 +47,12 @@ struct TaskMetaBase {
 
     // ========== Scheduling ==========
     std::atomic<TaskMetaBase*> next{nullptr};  ///< Intrusive queue linkage (MPSC)
+
+    // Intrusive waiter linkage for sync primitives (Mutex/CondVar/Event)
+    // Used only when state == SUSPENDED (waiting on a sync primitive)
+    // Mutually exclusive with 'next' field (used for scheduling queues when state == READY)
+    std::atomic<TaskMetaBase*> waiter_next{nullptr};
+
     Worker* owner_worker{nullptr};             ///< Worker currently running this task
 
     // ========== Synchronization ==========
