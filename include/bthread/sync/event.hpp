@@ -2,11 +2,11 @@
 #pragma once
 
 #include <atomic>
-#include <mutex>
 #include <coroutine>
 #include <chrono>
 
 #include "bthread/core/task_meta_base.hpp"
+#include "bthread/queue/mpsc_queue.hpp"
 
 namespace bthread {
 
@@ -124,16 +124,14 @@ private:
     std::atomic<bool> state_{false};
     bool auto_reset_{false};
 
-    // Waiters queue
-    std::mutex waiters_mutex_;
-    struct WaiterNode {
+    // Lock-free waiter queue (Optimization: eliminate mutex contention)
+    struct EventWaiterNode {
         TaskMetaBase* task;
-        WaiterNode* next;
+        std::atomic<EventWaiterNode*> next{nullptr};  // Required by MpscQueue
     };
-    WaiterNode* waiter_head_{nullptr};
-    WaiterNode* waiter_tail_{nullptr};
+    MpscQueue<EventWaiterNode> waiter_queue_;
 
-    // Helper methods
+    // Helper methods (lock-free)
     void enqueue_waiter(TaskMetaBase* task);
     TaskMetaBase* dequeue_waiter();
     void wake_all_waiters();

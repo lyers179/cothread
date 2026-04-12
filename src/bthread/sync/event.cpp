@@ -12,11 +12,8 @@ Event::Event(bool initial_set, bool auto_reset)
 }
 
 Event::~Event() {
-    std::lock_guard<std::mutex> lock(waiters_mutex_);
-    // Clean up any remaining waiters
-    while (waiter_head_) {
-        WaiterNode* node = waiter_head_;
-        waiter_head_ = node->next;
+    // Drain remaining waiters from lock-free queue
+    while (EventWaiterNode* node = waiter_queue_.Pop()) {
         delete node;
     }
 }
@@ -101,40 +98,24 @@ void Event::reset() {
 }
 
 void Event::enqueue_waiter(TaskMetaBase* task) {
-    std::lock_guard<std::mutex> lock(waiters_mutex_);
-    WaiterNode* node = new WaiterNode{task, nullptr};
-    if (waiter_tail_) {
-        waiter_tail_->next = node;
-        waiter_tail_ = node;
-    } else {
-        waiter_head_ = waiter_tail_ = node;
-    }
+    EventWaiterNode* node = new EventWaiterNode{task};
+    waiter_queue_.Push(node);  // Lock-free MPSC push
 }
 
 TaskMetaBase* Event::dequeue_waiter() {
-    std::lock_guard<std::mutex> lock(waiters_mutex_);
-    if (!waiter_head_) return nullptr;
-
-    WaiterNode* node = waiter_head_;
-    waiter_head_ = node->next;
-    if (!waiter_head_) waiter_tail_ = nullptr;
-
+    EventWaiterNode* node = waiter_queue_.Pop();  // Lock-free pop
+    if (!node) return nullptr;
     TaskMetaBase* task = node->task;
     delete node;
     return task;
 }
 
 void Event::wake_all_waiters() {
+    // Drain entire queue - lock-free
     std::vector<TaskMetaBase*> waiters;
-    {
-        std::lock_guard<std::mutex> lock(waiters_mutex_);
-        while (waiter_head_) {
-            WaiterNode* node = waiter_head_;
-            waiter_head_ = node->next;
-            waiters.push_back(node->task);
-            delete node;
-        }
-        waiter_tail_ = nullptr;
+    while (EventWaiterNode* node = waiter_queue_.Pop()) {
+        waiters.push_back(node->task);
+        delete node;
     }
 
     for (TaskMetaBase* waiter : waiters) {

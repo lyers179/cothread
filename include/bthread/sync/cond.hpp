@@ -2,11 +2,11 @@
 #pragma once
 
 #include <atomic>
-#include <mutex>
 #include <coroutine>
 #include <chrono>
 
 #include "bthread/core/task_meta_base.hpp"
+#include "bthread/queue/mpsc_queue.hpp"
 
 namespace bthread {
 
@@ -121,14 +121,12 @@ public:
     void notify_all();
 
 private:
-    // Waiters queue
-    std::mutex waiters_mutex_;
-    struct WaiterNode {
+    // Lock-free waiter queue (Optimization: eliminate mutex contention)
+    struct CondWaiterNode {
         TaskMetaBase* task;
-        WaiterNode* next;
+        std::atomic<CondWaiterNode*> next{nullptr};  // Required by MpscQueue
     };
-    WaiterNode* waiter_head_{nullptr};
-    WaiterNode* waiter_tail_{nullptr};
+    MpscQueue<CondWaiterNode> waiter_queue_;
 
     // Native condition variable for pthread context
     void* native_cond_{nullptr};
