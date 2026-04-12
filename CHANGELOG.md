@@ -9,18 +9,20 @@
 ## [Unreleased]
 
 ### Added
-- IntrusiveWaiterQueue: zero-allocation waiter management for sync primitives
-- TaskMetaBase::waiter_next: intrusive queue linkage field
 - ObjectPool<T>: generic lock-free object pool template using Treiber stack
 - TimerEntry::pool_next: pool linkage field
 - TaskWrapper::pool_next: pool linkage field
+- NextFieldPolicy<T>, WaiterNextFieldPolicy<T>: MpscQueue field access policies
 
 ### Changed
-- Mutex: use IntrusiveWaiterQueue, eliminate waiter node allocation
-- CondVar: use IntrusiveWaiterQueue, eliminate waiter node allocation
-- Event: use IntrusiveWaiterQueue, eliminate waiter node allocation
+- MpscQueue: policy-based next field access (compile-time zero overhead)
+- WaiterQueue: type alias using WaiterNextFieldPolicy for sync primitives
+- Mutex: use WaiterQueue, eliminate waiter node allocation
+- CondVar: use WaiterQueue, eliminate waiter node allocation
+- Event: use WaiterQueue, eliminate waiter node allocation
 - TimerThread: use ObjectPool for TimerEntry allocation
 - ExecutionQueue: use ObjectPool for TaskWrapper allocation
+- Deleted intrusive_waiter_queue.hpp (merged into mpsc_queue.hpp)
 
 ---
 
