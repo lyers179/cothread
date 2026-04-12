@@ -9,7 +9,13 @@
 ## [Unreleased]
 
 ### Added
-- 无
+- IntrusiveWaiterQueue: zero-allocation waiter management for sync primitives
+- TaskMetaBase::waiter_next: intrusive queue linkage field
+
+### Changed
+- Mutex: use IntrusiveWaiterQueue, eliminate waiter node allocation
+- CondVar: use IntrusiveWaiterQueue, eliminate waiter node allocation
+- Event: use IntrusiveWaiterQueue, eliminate waiter node allocation
 
 ---
 

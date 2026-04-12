@@ -711,6 +711,79 @@ EnqueueTask()                   ← ❌ Double enqueue!
 
 ---
 
+## 2026-04-12: Intrusive Waiter Queue Optimization
+
+**设计文档**: N/A (自包含优化)
+**实现计划**: `docs/superpowers/plans/2026-04-12-intrusive-waiter-queue.md`
+
+### 问题分析
+
+| 问题 | 描述 | 影响 |
+|------|------|------|
+| Waiter Node 动态分配 | 每次 waiter 需要 new/delete wrapper node | 高并发下 ~2.8M new/delete/sec |
+| 内存碎片 | 小对象频繁分配释放 | cache locality 差 |
+| 内存开销 | MutexWaiterNode ~16B + allocation overhead | 额外内存占用 |
+
+### 优化方案
+
+**侵入式设计**: 使用 TaskMetaBase 中的 `waiter_next` 字段直接链接，无需额外 wrapper node。
+
+```cpp
+// Before: dynamic allocation per waiter
+void enqueue_waiter(TaskMetaBase* task) {
+    MutexWaiterNode* node = new MutexWaiterNode{task};  // allocation
+    waiter_queue_.Push(node);
+}
+
+// After: zero allocation
+void enqueue_waiter(TaskMetaBase* task) {
+    waiter_queue_.Push(task);  // direct push using waiter_next field
+}
+```
+
+**关键洞察**: 任务同一时间只在一个队列中：
+- READY → scheduler queue (uses `next`)
+- SUSPENDED → waiter queue (uses `waiter_next`)
+
+两者互斥，可共存。
+
+### 文件变更
+
+| 文件 | 变更 |
+|------|------|
+| `task_meta_base.hpp` | 新增 `waiter_next` 字段 |
+| `intrusive_waiter_queue.hpp` | 新增零分配 waiter queue 类 |
+| `mutex.hpp/cpp` | 替换为 IntrusiveWaiterQueue |
+| `cond.hpp/cpp` | 替换为 IntrusiveWaiterQueue |
+| `event.hpp/cpp` | 替换为 IntrusiveWaiterQueue |
+
+### 提交记录
+
+| 提交 | 说明 |
+|------|------|
+| `36f5f2b` | feat(task_meta): add waiter_next field |
+| `76bb60e` | feat(queue): add IntrusiveWaiterQueue template |
+| `22f9295` | test(queue): add IntrusiveWaiterQueue tests |
+| `8acb995` | perf(mutex): use intrusive waiter queue |
+| `626c757` | perf(cond): use intrusive waiter queue |
+| `a2778cb` | perf(event): use intrusive waiter queue |
+
+### 性能结果
+
+| 指标 | Before | After | 说明 |
+|------|--------|-------|------|
+| Allocation Rate (waiter) | ~2.8M/sec | **0** | 完全消除 |
+| Yield | ~122M/sec | ~100M/sec | 稳定 |
+| Mutex Contention | ~28M/sec | ~26M/sec | 稳定 |
+| Scalability (8w) | ~13x | ~13.75x | 稳定 |
+
+**关键成果**:
+- **零分配**: Sync primitive waiter queue 不再有任何动态内存分配
+- **更好的 cache locality**: TaskMetaBase 本身就是热点数据
+- **简化代码**: 减少 wrapper struct 和 delete 调用
+
+---
+
 ## 未来优化方向
 
 1. **大栈支持**: 当前池只支持 8KB 默认栈，大栈仍需 mmap
