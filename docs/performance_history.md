@@ -508,6 +508,76 @@ if (!head && !tail) return nullptr;  // ← 只有真正空才返回 nullptr
 
 ---
 
+### Wait 优化分析 (2026-04-12)
+
+分析 Wait 中 Step 7.5 和 CAS 的必要性，评估优化可行性。
+
+#### Step 7.5 必要性分析
+
+**引入 commit:** `29946dfe` (Phase 4 Lock-Free 优化)
+
+**目的:** 捕捉 Wake 在 Wait 入队后改变 butex 值的边缘情况。
+
+**分析结论: Step 7.5 必要，无法移除**
+
+**关键竞态场景:**
+
+```
+Wait:                           Wake:
+Step 4: acquire load value ✓    
+                                change value
+                                PopFromHead (empty)
+Step 7: enter queue             
+                                PopFromHead (gets waiter)
+                                increment wake_count
+                                check state = RUNNING
+                                skip enqueue
+Step 8: saved_wake_count        
+        (Wake increment NOT visible)
+Step 9: CAS to SUSPENDED ✓      
+Step 10: acquire load           
+         (可能未看到 Wake's release)
+Step 11: No change detected
+Step 12: SUSPEND indefinitely!
+```
+
+**Step 7.5 的作用:** 在入队后重新检查 butex 值。如果值已变，Wait 立即退出队列返回，避免进入 SUSPENDED 状态后无法被唤醒。
+
+**移除风险:** 如果 Wake 改变值后错过 waiter（waiter不在队列），Wait 会永远挂起。
+
+#### Wait CAS 必要性分析
+
+**分析结论: Wait CAS 必要，无法改为直接 store**
+
+**原因:** 防止双重入队。
+
+```
+Wait:                           Wake:
+state = SUSPENDED               
+                                wake_count.fetch_add(1)
+                                state.load() = SUSPENDED
+                                state.store(READY)     ← Wake direct store
+                                EnqueueTask()          ← Wake enqueue
+  
+wake_count change detected      
+state.store(READY)              ← Wait direct store
+EnqueueTask()                   ← ❌ Double enqueue!
+```
+
+**正确策略:** Wake 用直接 store（快），Wait 用 CAS 保护（确保只有一方入队）。
+
+#### 性能对比
+
+| 策略 | Wake 开销 | Wait 开销 | Step 7.5 | 安全性 |
+|------|-----------|-----------|----------|--------|
+| Phase 3（双 store） | ~1x | ~1x | 无 | ✗ 有竞态风险 |
+| Phase 4（双 CAS） | ~3x | ~3x | 有 | ✓ 安全但慢 |
+| **Phase 5+（Wake store + Wait CAS）** | **~1x** | ~3x | 有 | ✓ 安全 |
+
+**结论:** 当前设计（Wake store + Wait CAS + Step 7.5）是最优平衡。Phase 3 的高性能有竞态风险，无法恢复。
+
+---
+
 ## 未来优化方向
 
 1. **大栈支持**: 当前池只支持 8KB 默认栈，大栈仍需 mmap
