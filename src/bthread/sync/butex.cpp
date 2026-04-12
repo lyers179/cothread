@@ -202,12 +202,10 @@ void Butex::Wake(int count) {
             // Check if task is SUSPENDED - use acquire to see latest state
             TaskState state = waiter->state.load(std::memory_order_acquire);
             if (state == TaskState::SUSPENDED) {
-                // Use CAS to ensure only Wake enqueues (not Wait's wake_count check)
-                TaskState expected = TaskState::SUSPENDED;
-                if (waiter->state.compare_exchange_strong(expected, TaskState::READY,
-                        std::memory_order_acq_rel, std::memory_order_acquire)) {
-                    Scheduler::Instance().EnqueueTask(waiter);
-                }
+                // Direct store - Wait uses CAS for protection
+                // Wake increments wake_count first, Wait CAS will fail if Wake already stored
+                waiter->state.store(TaskState::READY, std::memory_order_release);
+                Scheduler::Instance().EnqueueTask(waiter);
             }
             // If RUNNING or READY, Wait will handle it
         }
