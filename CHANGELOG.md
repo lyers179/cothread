@@ -15,6 +15,8 @@
 - NextFieldPolicy<T>, WaiterNextFieldPolicy<T>: MpscQueue field access policies
 
 ### Changed
+- MpmcQueue: renamed from ButexQueue, now generic MPMC queue template in queue/
+- SharedMPSCQueue: renamed from ShardedGlobalQueue, clearer naming for sharded MPSC queue
 - MpscQueue: policy-based next field access (compile-time zero overhead)
 - WaiterQueue: type alias using WaiterNextFieldPolicy for sync primitives
 - Mutex: use WaiterQueue, eliminate waiter node allocation
