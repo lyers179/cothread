@@ -6,6 +6,7 @@
 #include <coroutine>
 
 #include "bthread/core/task_meta_base.hpp"
+#include "bthread/queue/mpsc_queue.hpp"
 
 // Forward declarations
 namespace bthread {
@@ -112,14 +113,12 @@ private:
 
     std::atomic<uint32_t> state_{0};
 
-    // Waiters queue for coroutine waiters
-    std::mutex waiters_mutex_;
+    // Lock-free waiter queue for coroutine waiters (Optimization 2)
     struct MutexWaiterNode {
         TaskMetaBase* task;
-        MutexWaiterNode* next;
+        std::atomic<MutexWaiterNode*> next{nullptr};  // Required by MpscQueue
     };
-    MutexWaiterNode* waiter_head_{nullptr};
-    MutexWaiterNode* waiter_tail_{nullptr};
+    MpscQueue<MutexWaiterNode> waiter_queue_;
 
     // Native mutex for pthread context
     void* native_mutex_{nullptr};
