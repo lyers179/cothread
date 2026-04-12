@@ -7,11 +7,13 @@
 #include <mutex>
 
 #include "bthread/platform/platform.h"
+#include "bthread/pool/object_pool.hpp"
 
 namespace bthread {
 
-// Timer entry
+// Timer entry - with pool linkage
 struct TimerEntry {
+    std::atomic<TimerEntry*> pool_next{nullptr};  // Required by ObjectPool
     void (*callback)(void*);
     void* arg;
     int64_t deadline_us;
@@ -95,6 +97,9 @@ private:
     std::atomic<int> wakeup_futex_{0};  // For FutexWait (must be int)
     platform::ThreadId thread_;
     std::atomic<int> next_id_{0};
+
+    // Object pool for TimerEntry
+    static ObjectPool<TimerEntry> entry_pool_;
 };
 
 } // namespace bthread

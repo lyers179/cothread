@@ -8,6 +8,9 @@
 
 namespace bthread {
 
+// Static pool instance for TimerEntry
+ObjectPool<TimerEntry> TimerThread::entry_pool_(256);
+
 TimerThread::TimerThread() = default;
 
 TimerThread::~TimerThread() {
@@ -43,12 +46,12 @@ void TimerThread::Stop() {
     platform::FutexWake(&wakeup_futex_, 1);
     platform::JoinThread(thread_);
 
-    // Clean up remaining entries in shards
+    // Clean up remaining entries in shards - return to pool
     if (worker_count_ > 0) {
         for (int i = 0; i < worker_count_; ++i) {
             std::lock_guard<std::mutex> lock(shards_[i].mutex);
             for (auto* entry : shards_[i].heap) {
-                delete entry;
+                entry_pool_.Release(entry);
             }
             shards_[i].heap.clear();
         }
@@ -56,7 +59,7 @@ void TimerThread::Stop() {
         // Fallback to global heap
         std::lock_guard<std::mutex> lock(heap_mutex_);
         for (auto* entry : heap_) {
-            delete entry;
+            entry_pool_.Release(entry);
         }
         heap_.clear();
     }
@@ -70,8 +73,9 @@ int TimerThread::Schedule(void (*callback)(void*), void* arg, const platform::ti
                        delay->tv_nsec / 1000;
     int64_t deadline_us = platform::GetTimeOfDayUs() + delay_us;
 
-    // Create entry
-    auto* entry = new TimerEntry();
+    // Create entry from pool
+    auto* entry = entry_pool_.Acquire();
+    // Reset fields for reuse
     entry->callback = callback;
     entry->arg = arg;
     entry->deadline_us = deadline_us;
@@ -161,7 +165,7 @@ void TimerThread::TimerThreadMain() {
                 if (entry->cancelled) {
                     // Remove cancelled entry
                     PopFromHeap();
-                    delete entry;
+                    entry_pool_.Release(entry);
                     continue;
                 }
 
@@ -174,7 +178,7 @@ void TimerThread::TimerThreadMain() {
                 PopFromHeap();
                 void (*callback)(void*) = entry->callback;
                 void* arg = entry->arg;
-                delete entry;
+                entry_pool_.Release(entry);
 
                 // Execute callback (release lock first)
                 heap_mutex_.unlock();
@@ -209,7 +213,7 @@ void TimerThread::ProcessShard(TimerShard& shard) {
 
         if (entry->cancelled) {
             ShardPopFromHeap(shard.heap);
-            delete entry;
+            entry_pool_.Release(entry);
             continue;
         }
 
@@ -226,7 +230,7 @@ void TimerThread::ProcessShard(TimerShard& shard) {
         // Execute callback (release lock)
         void (*callback)(void*) = entry->callback;
         void* arg = entry->arg;
-        delete entry;
+        entry_pool_.Release(entry);
 
         shard.mutex.unlock();
         callback(arg);

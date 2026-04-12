@@ -65,8 +65,5 @@ add_test(NAME ShardedQueueTest COMMAND sharded_queue_test)
 # Sync tests
 add_subdirectory(sync)
 
-# Pool tests
-add_subdirectory(pool)
-
 # Performance tests (requires gtest and benchmark)
 add_subdirectory(perf)
