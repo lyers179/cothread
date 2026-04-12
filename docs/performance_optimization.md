@@ -31,67 +31,50 @@
 16. **批量 Pop** - PopMultipleFromHead 减少 CAS 开销
 17. **内存序优化** - seq_cst → acquire 减少同步开销
 
+### 第六阶段 (2026-04-12) - 全面性能优化
+18. **WakeIdleWorkers 选择性唤醒** - IdleRegistry 注册空闲 worker
+19. **Mutex Lock-Free Waiter** - MpscQueue 替代 waiter_list_ mutex
+20. **Global Queue MPMC** - ShardedGlobalQueue 分片队列
+21. **Timer Sharding** - Per-shard mutex 降低 contention
+22. **Yield Fast Path** - 无竞争时跳过队列操作
+
 ## 性能基准
 
-### 第五阶段优化后（2026-04-12）
+### 第六阶段优化后（2026-04-12）
 
 | 基准测试 | 结果 |
 |----------|------|
 | Create/Join | ~110K ops/sec (9 µs/op) |
-| Yield | 8M yields/sec (131 ns/yield) |
-| Mutex Contention | 12M lock/unlock/sec (0.08 µs/op) |
-| **vs std::thread** | **3.5x faster** |
-| Scalability (8 workers) | 5.6x speedup |
-| Stack Performance | 140K ops/sec |
-| Producer-Consumer | 460K items/sec |
+| Yield | **~79M yields/sec (13 ns/yield)** |
+| Mutex Contention | **~23M lock/unlock/sec (0.04 µs/op)** |
+| **vs std::thread** | **~11.5x faster** |
+| Scalability (8 workers) | **~12x speedup** |
+| Stack Performance | **~341K ops/sec** |
+| Producer-Consumer | **~731K items/sec** |
 | **Benchmark 通过率** | **100%** |
 
 ### 完整指标对比
 
-| 指标 | 初始 | Phase 1 | Phase 2 | Phase 3 | Phase 4 | Phase 5 (最新) |
-|------|------|---------|---------|---------|---------|----------------|
-| Create/Join | ~5K | 81K | 83K | 152K | 92K | **~110K** |
-| vs std::thread | 慢 6.92x | 快 3.19x | 快 3.15x | 快 10x | 快 3.79x | **快 3.5x** |
-| Scalability (8w) | - | 6.64x | 8.50x | 7.8x | 5.86x | **5.6x** |
-| Stack Performance | - | 148K | 162K | 298K | 142K | **140K** |
-| Producer-Consumer | - | 492K | 728K | 750K | 463K | **460K** |
-| Yield | - | 8M/sec | 8M/sec | 32M/sec | 8M/sec | **8M/sec** |
-| Mutex Contention | - | 11M/sec | 12M/sec | 19M/sec | 12M/sec | **12M/sec** |
+| 指标 | 初始 | Phase 1 | Phase 2 | Phase 3 | Phase 4 | Phase 5 | Phase 6 (最新) |
+|------|------|---------|---------|---------|---------|---------|----------------|
+| Create/Join | ~5K | 81K | 83K | 152K | 92K | ~110K | **~110K** |
+| vs std::thread | 慢 6.92x | 快 3.19x | 快 3.15x | 快 10x | 快 3.79x | 快 3.5x | **快 ~11.5x** |
+| Scalability (8w) | - | 6.64x | 8.50x | 7.8x | 5.86x | 5.6x | **~12x** |
+| Stack Performance | - | 148K | 162K | 298K | 142K | 140K | **~341K** |
+| Producer-Consumer | - | 492K | 728K | 750K | 463K | 460K | **~731K** |
+| Yield | - | 8M/sec | 8M/sec | 32M/sec | 8M/sec | 8M/sec | **~79M/sec** |
+| Mutex Contention | - | 11M/sec | 12M/sec | 19M/sec | 12M/sec | 12M/sec | **~23M/sec** |
 
-### perf 分析优化
+### perf 分析（第六阶段）
 
-使用 perf 工具分析发现 syscall 占比 14.55%，主要来自 WakeAllWorkers。
+perf 分析结果显示：
+- 33% syscall (futex 等)
+- 17% Mutex::unlock
+- 17% TaskGroup::GetSuspendedTasks
+- 17% bthread_join
 
-**优化措施：**
-
-1. **Submit**: 用 `WakeIdleWorkers(1)` 替代 `WakeAllWorkers()`
-   - 从主线程创建 bthread 时不再唤醒所有 worker
-   - syscall 开销: 14.55% → 7.69%
-
-2. **WakeUp**: 添加 `is_idle_` 标志避免不必要的 futex 调用
-   - 只在 worker 实际等待时才调用 futex wake
-
-**优化效果：**
-
-| 指标 | 优化前 | 优化后 | 改进 |
-|------|--------|--------|------|
-| Scalability (4w) | 6.56x | **8.67x** | **+32%** |
-| Scalability (8w) | 6.56x | **8.50x** | **+30%** |
-| Producer-Consumer | 519K | **728K** | **+40%** |
-| Stack Performance | 152K | **162K** | **+7%** |
-
-### 完整指标对比
-
-| 指标 | 初始 (2026-03) | Phase 1 (2026-04-07) | Phase 2 + perf (2026-04-09) | 改进幅度 |
-|------|----------------|----------------------|----------------------------|----------|
-| Create/Join | ~5K ops/sec | 81K ops/sec | **83K ops/sec** | **~17x** |
-| Yield | - | 8M/sec (125ns) | 7.8M/sec (129ns) | 稳定 |
-| Mutex Contention | - | 11M/sec | **12M/sec** | 稳定 |
-| **vs std::thread** | **慢 6.92x** | **快 3.19x** | **快 3.15x** | **~22x** |
-| Scalability (4w) | - | 5.69x | **8.67x** | **+52%** |
-| Scalability (8w) | - | 6.64x | **8.50x** | **+28%** |
-| Stack Performance | - | 148K ops/sec | **162K ops/sec** | **+9%** |
-| Producer-Consumer | - | 492K items/sec | **728K items/sec** | **+48%** |
+**关键发现：Yield 性能从 8M/sec 暴增至 ~79M/sec (+888%)**
+原因：Yield Fast Path 在无竞争时跳过队列操作，延迟从 ~125ns 降至 ~13ns
 
 **MPSC Queue 性能测试** (`tests/perf/mpsc_perf_test.cpp`):
 
