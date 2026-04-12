@@ -6,7 +6,7 @@
 #include <chrono>
 
 #include "bthread/core/task_meta_base.hpp"
-#include "bthread/queue/mpsc_queue.hpp"
+#include "bthread/queue/intrusive_waiter_queue.hpp"
 
 namespace bthread {
 
@@ -121,12 +121,8 @@ public:
     void notify_all();
 
 private:
-    // Lock-free waiter queue (Optimization: eliminate mutex contention)
-    struct CondWaiterNode {
-        TaskMetaBase* task;
-        std::atomic<CondWaiterNode*> next{nullptr};  // Required by MpscQueue
-    };
-    MpscQueue<CondWaiterNode> waiter_queue_;
+    // Intrusive waiter queue (zero-allocation)
+    IntrusiveWaiterQueue waiter_queue_;
 
     // Native condition variable for pthread context
     void* native_cond_{nullptr};

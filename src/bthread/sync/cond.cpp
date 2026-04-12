@@ -33,10 +33,7 @@ CondVar::CondVar() {
 }
 
 CondVar::~CondVar() {
-    // Drain remaining waiters from lock-free queue
-    while (CondWaiterNode* node = waiter_queue_.Pop()) {
-        delete node;
-    }
+    // IntrusiveWaiterQueue - no dynamic allocation, no cleanup needed
 
     if (native_cond_) {
 #ifdef _WIN32
@@ -141,14 +138,8 @@ void CondVar::notify_one() {
 }
 
 void CondVar::notify_all() {
-    // Wake all bthread/coroutine waiters - drain entire queue lock-free
-    std::vector<TaskMetaBase*> waiters;
-    while (CondWaiterNode* node = waiter_queue_.Pop()) {
-        waiters.push_back(node->task);
-        delete node;
-    }
-
-    for (TaskMetaBase* waiter : waiters) {
+    // Drain entire queue lock-free - no allocation/deallocation
+    while (TaskMetaBase* waiter = waiter_queue_.Pop()) {
         waiter->state.store(TaskState::READY, std::memory_order_release);
         waiter->waiting_sync = nullptr;
         Scheduler::Instance().Submit(waiter);
@@ -163,16 +154,11 @@ void CondVar::notify_all() {
 }
 
 void CondVar::enqueue_waiter(TaskMetaBase* task) {
-    CondWaiterNode* node = new CondWaiterNode{task};
-    waiter_queue_.Push(node);  // Lock-free MPSC push
+    waiter_queue_.Push(task);  // Direct push, no allocation
 }
 
 TaskMetaBase* CondVar::dequeue_waiter() {
-    CondWaiterNode* node = waiter_queue_.Pop();  // Lock-free pop
-    if (!node) return nullptr;
-    TaskMetaBase* task = node->task;
-    delete node;
-    return task;
+    return waiter_queue_.Pop();  // Direct pop, no allocation
 }
 
 // ========== WaitAwaiter Implementation ==========
