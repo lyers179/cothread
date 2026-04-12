@@ -784,6 +784,71 @@ void enqueue_waiter(TaskMetaBase* task) {
 
 ---
 
+## 2026-04-12: Generic ObjectPool Optimization
+
+**实现计划**: `docs/superpowers/plans/2026-04-12-object-pool.md`
+
+### 问题分析
+
+| 对象 | 分配频率 | 大小 | 影响 |
+|------|----------|------|------|
+| TimerEntry | 每次定时器添加 | ~40B | timer 操作频繁时分配开销大 |
+| TaskWrapper | 每次 Submit | ~48B | execution queue 使用频繁时开销大 |
+
+### 优化方案
+
+创建通用 `ObjectPool<T>` 模板：
+- Lock-free Treiber stack (LIFO) 实现
+- Intrusive design: 使用 `pool_next` atomic 字段链接
+- Pool size limit: 超出限制的对象直接 delete
+- Acquire: 从池 pop 或 allocate new
+- Release: push 到池或 delete if full
+
+```cpp
+template<typename T>
+class ObjectPool {
+    T* Acquire() {
+        // Lock-free pop from pool, or new T() if empty
+    }
+    void Release(T* obj) {
+        // Lock-free push to pool, or delete if full
+    }
+};
+```
+
+### 文件变更
+
+| 文件 | 变更 |
+|------|------|
+| `pool/object_pool.hpp` | 新增通用对象池模板 |
+| `timer_thread.hpp/cpp` | TimerEntry 使用 ObjectPool |
+| `execution_queue.hpp/cpp` | TaskWrapper 使用 ObjectPool |
+
+### 提交记录
+
+| 提交 | 说明 |
+|------|------|
+| `0444535` | feat(pool): add generic ObjectPool template |
+| `6216f91` | test(pool): add ObjectPool unit tests |
+| `ea7e892` | perf(timer): use ObjectPool for TimerEntry |
+| `76c7315` | perf(execution_queue): use ObjectPool for TaskWrapper |
+
+### 性能结果
+
+| 指标 | Before | After |
+|------|--------|-------|
+| TimerEntry alloc | new/delete | Pool |
+| TaskWrapper alloc | new/delete | Pool |
+| Yield | ~190M/sec | ~192M/sec |
+| Mutex | ~28M/sec | ~26.8M/sec |
+| Scalability (8w) | ~15x | ~23x |
+
+**关键成果**:
+- TimerEntry 和 TaskWrapper 不再有动态分配开销
+- 更好的内存复用，减少碎片
+
+---
+
 ## 未来优化方向
 
 1. **大栈支持**: 当前池只支持 8KB 默认栈，大栈仍需 mmap
