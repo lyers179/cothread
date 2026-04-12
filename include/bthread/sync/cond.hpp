@@ -6,7 +6,7 @@
 #include <chrono>
 
 #include "bthread/core/task_meta_base.hpp"
-#include "bthread/queue/intrusive_waiter_queue.hpp"
+#include "bthread/queue/mpsc_queue.hpp"  // WaiterQueue uses waiter_next policy
 
 namespace bthread {
 
@@ -121,8 +121,8 @@ public:
     void notify_all();
 
 private:
-    // Intrusive waiter queue (zero-allocation)
-    IntrusiveWaiterQueue waiter_queue_;
+    // Waiter queue using waiter_next policy (zero-allocation)
+    WaiterQueue waiter_queue_;
 
     // Native condition variable for pthread context
     void* native_cond_{nullptr};
