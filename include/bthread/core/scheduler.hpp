@@ -101,6 +101,9 @@ public:
     /// Wake idle workers
     void WakeIdleWorkers(int count);
 
+    /// Pop one idle worker from registry (returns -1 if none)
+    int PopIdleWorker();
+
     /// Called by worker when it's ready (has entered Run loop)
     void WorkerReady();
 
@@ -169,6 +172,14 @@ private:
     std::condition_variable workers_ready_cv_;
 
     GlobalQueue global_queue_;
+
+    // ========== Idle Worker Registry (Optimization 1) ==========
+    // Lock-free linked list of idle workers
+    std::atomic<int> idle_head_{-1};            // Head of idle list (-1 = empty)
+    std::atomic<int> idle_next_[MAX_WORKERS];  // Next pointers for each worker
+
+    // Helper method for idle registry
+    void RegisterIdleWorker(int worker_id);    // Called by Worker before futex wait
 
     std::unique_ptr<TimerThread> timer_thread_;
     std::once_flag timer_init_flag_;
