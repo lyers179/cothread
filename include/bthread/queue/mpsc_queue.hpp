@@ -16,6 +16,33 @@
 
 namespace bthread {
 
+// ========== Next Field Access Policies ==========
+
+/**
+ * @brief Default policy: access using `next` field.
+ * Used for general-purpose MPSC queues (scheduler, execution queue, etc.)
+ */
+template<typename T>
+struct NextFieldPolicy {
+    static std::atomic<T*>& Get(T* obj) { return obj->next; }
+    static void Clear(T* obj) {
+        obj->next.store(nullptr, std::memory_order_relaxed);
+    }
+};
+
+/**
+ * @brief Waiter policy: access using `waiter_next` field.
+ * Used for sync primitive waiter queues (Mutex, CondVar, Event).
+ * Mutually exclusive with scheduler's `next` field usage.
+ */
+template<typename T>
+struct WaiterNextFieldPolicy {
+    static std::atomic<T*>& Get(T* obj) { return obj->waiter_next; }
+    static void Clear(T* obj) {
+        obj->waiter_next.store(nullptr, std::memory_order_relaxed);
+    }
+};
+
 /**
  * @brief MPSC (Multi-Producer Single-Consumer) lock-free queue template.
  *
@@ -27,8 +54,9 @@ namespace bthread {
  * Uses adaptive spinning: pause first (low latency), then yield.
  *
  * @tparam T Type that must have a `std::atomic<T*> next` member (intrusive queue).
+ * @tparam Policy Field access policy (default: NextFieldPolicy for `next` field).
  */
-template<typename T>
+template<typename T, typename Policy = NextFieldPolicy<T>>
 class MpscQueue {
 public:
     MpscQueue() = default;
@@ -43,10 +71,10 @@ public:
      * @param item Pointer to item to enqueue (must have `next` member)
      */
     void Push(T* item) {
-        item->next.store(nullptr, std::memory_order_relaxed);
+        Policy::Clear(item);
         T* prev = head_.exchange(item, std::memory_order_acq_rel);
         if (prev) {
-            prev->next.store(item, std::memory_order_release);
+            Policy::Get(prev).store(item, std::memory_order_release);
         } else {
             // First element - set tail
             tail_.store(item, std::memory_order_release);
@@ -67,10 +95,10 @@ public:
         T* t = tail_.load(std::memory_order_acquire);
         if (!t) return nullptr;
 
-        T* next = static_cast<T*>(t->next.load(std::memory_order_acquire));
+        T* next = static_cast<T*>(Policy::Get(t).load(std::memory_order_acquire));
         if (next) {
             tail_.store(next, std::memory_order_release);
-            t->next.store(nullptr, std::memory_order_relaxed);  // Clear next pointer
+            Policy::Clear(t);  // Clear next pointer
             return t;
         }
 
@@ -79,7 +107,7 @@ public:
         if (head_.compare_exchange_strong(expected, nullptr,
                 std::memory_order_acq_rel, std::memory_order_acquire)) {
             tail_.store(nullptr, std::memory_order_release);
-            t->next.store(nullptr, std::memory_order_relaxed);  // Clear next pointer
+            Policy::Clear(t);  // Clear next pointer
             return t;
         }
 
@@ -90,10 +118,10 @@ public:
 
         while (true) {
             // Re-load next with acquire (not seq_cst - sufficient for this case)
-            T* n = static_cast<T*>(t->next.load(std::memory_order_acquire));
+            T* n = static_cast<T*>(Policy::Get(t).load(std::memory_order_acquire));
             if (n) {
                 tail_.store(n, std::memory_order_release);
-                t->next.store(nullptr, std::memory_order_relaxed);  // Clear next pointer
+                Policy::Clear(t);  // Clear next pointer
                 return t;
             }
 
@@ -160,7 +188,10 @@ private:
     std::atomic<T*> tail_{nullptr};
 };
 
-// Type alias for the unified task queue
+// Default task queue (uses `next` field)
 using TaskQueue = MpscQueue<TaskMetaBase>;
+
+// Waiter queue for sync primitives (uses `waiter_next` field)
+using WaiterQueue = MpscQueue<TaskMetaBase, WaiterNextFieldPolicy<TaskMetaBase>>;
 
 } // namespace bthread
