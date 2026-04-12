@@ -50,7 +50,6 @@ set(BTHREAD_SOURCES
     src/bthread/queue/work_stealing_queue.cpp
     src/bthread/queue/execution_queue.cpp
     src/bthread/queue/shared_mpsc_queue.cpp
-    src/bthread/queue/mpmc_queue.cpp
     src/bthread/sync/butex.cpp
     src/bthread/sync/mutex.cpp
     src/bthread/sync/cond.cpp

@@ -43,26 +43,10 @@ struct MpmcNode {
  *
  * Accesses `next` and `claimed` fields via `mpmc_node` sub-object.
  * Use this when MpmcNode is embedded as a member (most common case).
- *
- * Example:
- * ```cpp
- * struct TaskMeta {
- *     MpmcNode mpmc_node;  // Embedded
- *     ...
- * };
- * using ButexWaiterQueue = MpmcQueue<TaskMeta, MpmcEmbeddedNodePolicy<TaskMeta>>;
- * ```
  */
 template<typename T>
 struct MpmcEmbeddedNodePolicy {
-    // Note: MpmcNode* is cast to T* internally, so we need to access via offset
-    // But since we work with T* directly, we access mpmc_node member
-
     static std::atomic<T*>& GetNext(T* obj) {
-        // This is tricky - mpmc_node.next is atomic<MpmcNode*>, not atomic<T*>
-        // We need a different approach: store the T* pointer but interpret as MpmcNode*
-        // Actually, for embedded node, the next pointer IS the T* pointer
-        // We reinterpret_cast<MpmcNode*> to T* for type safety
         return reinterpret_cast<std::atomic<T*>&>(obj->mpmc_node.next);
     }
 
@@ -82,18 +66,7 @@ struct MpmcEmbeddedNodePolicy {
 /**
  * @brief Policy for direct next/claimed fields.
  *
- * Use this when the struct has `next` and `claimed` as direct members
- * (not embedded in a sub-object).
- *
- * Example:
- * ```cpp
- * struct MyType {
- *     std::atomic<MyType*> next{nullptr};
- *     std::atomic<bool> claimed{false};
- *     ...
- * };
- * using MyQueue = MpmcQueue<MyType, MpmcDirectFieldPolicy<MyType>>;
- * ```
+ * Use this when the struct has `next` and `claimed` as direct members.
  */
 template<typename T>
 struct MpmcDirectFieldPolicy {
@@ -114,21 +87,22 @@ struct MpmcDirectFieldPolicy {
     }
 };
 
+// TaskState enum values for AddToHead rollback logic
+enum MpmcTaskStateValue {
+    MPMC_TASK_STATE_READY = 1,
+    MPMC_TASK_STATE_RUNNING = 2,
+};
+
 /**
  * @brief Generic lock-free MPMC (Multi-Producer Multi-Consumer) queue.
  *
- * This class implements a lock-free multiple-producer multiple-consumer queue.
  * Uses `claimed` flag for ABA prevention in multi-consumer scenarios.
  *
  * Thread safety:
- * - AddToTail/AddToHead can be called from multiple threads concurrently (MPMC)
- * - PopFromHead can be called from multiple threads concurrently (MPMC)
+ * - AddToTail/AddToHead: Safe from multiple producers
+ * - PopFromHead: Safe from multiple consumers
  *
- * Race condition handling:
- * - If is_waiting is provided, AddToTail/AddToHead check it after the exchange/CAS
- * - This handles the race where Wake() clears is_waiting during Add operation
- *
- * @tparam T Type that must have MpmcNode embedded or direct next/claimed fields.
+ * @tparam T Type with embedded MpmcNode or direct next/claimed fields.
  * @tparam Policy Field access policy (default: MpmcEmbeddedNodePolicy).
  */
 template<typename T, typename Policy = MpmcEmbeddedNodePolicy<T>>
@@ -137,56 +111,174 @@ public:
     MpmcQueue() = default;
     ~MpmcQueue() = default;
 
-    // Disable copy and move
     MpmcQueue(const MpmcQueue&) = delete;
     MpmcQueue& operator=(const MpmcQueue&) = delete;
 
-    /**
-     * @brief Add an item to the tail of the queue (FIFO order).
-     * @param item The item to add.
-     * @param is_waiting Optional pointer to is_waiting flag for race handling.
-     *                   If provided, checked after exchange to handle Wake() race.
-     * @note Caller should initialize item's next/claimed fields before calling.
-     */
-    void AddToTail(T* item, std::atomic<bool>* is_waiting = nullptr);
+    void AddToTail(T* item, std::atomic<bool>* is_waiting = nullptr) {
+        if (is_waiting && !is_waiting->load(std::memory_order_relaxed)) {
+            return;
+        }
 
-    /**
-     * @brief Add an item to the head of the queue (LIFO order).
-     * @param item The item to add.
-     * @param is_waiting Optional pointer to is_waiting flag for race handling.
-     * @param state Optional pointer to state for LIFO rollback handling.
-     * @note Caller should initialize item's claimed field before calling.
-     */
+        Policy::ClearNext(item);
+        Policy::ClearClaimed(item);
+
+        T* prev = tail_.exchange(item, std::memory_order_acq_rel);
+
+        if (is_waiting && !is_waiting->load(std::memory_order_acquire)) {
+            Policy::GetClaimed(item).store(true, std::memory_order_release);
+            return;
+        }
+
+        if (prev) {
+            Policy::GetNext(prev).store(item, std::memory_order_release);
+        } else {
+            T* expected = nullptr;
+            head_.compare_exchange_strong(expected, item,
+                std::memory_order_release, std::memory_order_relaxed);
+        }
+    }
+
     void AddToHead(T* item, std::atomic<bool>* is_waiting = nullptr,
-                   std::atomic<uint8_t>* state = nullptr);
+                   std::atomic<uint8_t>* state = nullptr) {
+        if (is_waiting && !is_waiting->load(std::memory_order_relaxed)) {
+            return;
+        }
 
-    /**
-     * @brief Pop an item from the head of the queue.
-     * @return The item at the head, or nullptr if queue is empty.
-     *
-     * Uses adaptive spinning: pause (CPU instruction) first, then yield.
-     */
-    T* PopFromHead();
+        while (true) {
+            T* old_head = head_.load(std::memory_order_acquire);
 
-    /**
-     * @brief Pop multiple items from the head of the queue.
-     * @param buffer Buffer to store popped items.
-     * @param max_count Maximum number of items to pop.
-     * @return Number of items actually popped.
-     */
-    int PopMultipleFromHead(T** buffer, int max_count);
+            if (is_waiting && !is_waiting->load(std::memory_order_relaxed)) {
+                return;
+            }
 
-    /**
-     * @brief Mark an item as claimed (skip during pop) and clear is_waiting.
-     * @param item The item to mark.
-     * @param is_waiting Pointer to is_waiting flag to clear.
-     */
-    void Remove(T* item, std::atomic<bool>* is_waiting);
+            Policy::GetNext(item).store(old_head, std::memory_order_relaxed);
 
-    /**
-     * @brief Check if the queue is empty.
-     * @return true if the queue appears empty, false otherwise.
-     */
+            if (head_.compare_exchange_strong(old_head, item,
+                    std::memory_order_release, std::memory_order_relaxed)) {
+                if (is_waiting && !is_waiting->load(std::memory_order_acquire)) {
+                    if (state) {
+                        uint8_t s = state->load(std::memory_order_acquire);
+                        if (s == MPMC_TASK_STATE_READY || s == MPMC_TASK_STATE_RUNNING) {
+                            Policy::GetClaimed(item).store(true, std::memory_order_release);
+                            return;
+                        }
+                    }
+
+                    Policy::GetClaimed(item).store(true, std::memory_order_release);
+
+                    T* expected = item;
+                    head_.compare_exchange_strong(expected, old_head,
+                        std::memory_order_release, std::memory_order_relaxed);
+
+                    return;
+                }
+
+                if (!old_head) {
+                    T* expected = nullptr;
+                    tail_.compare_exchange_strong(expected, item,
+                        std::memory_order_release, std::memory_order_relaxed);
+                }
+                return;
+            }
+        }
+    }
+
+    T* PopFromHead() {
+        constexpr int MAX_EMPTY_SPINS = 1000;
+        int empty_spin_count = 0;
+
+        while (true) {
+            T* head = head_.load(std::memory_order_acquire);
+
+            if (!head) {
+                T* tail = tail_.load(std::memory_order_acquire);
+                if (!tail) {
+                    return nullptr;
+                }
+
+                if (++empty_spin_count < MAX_EMPTY_SPINS) {
+                    BTHREAD_MPMC_PAUSE();
+                } else {
+                    std::this_thread::yield();
+                    empty_spin_count = 0;
+                }
+                continue;
+            }
+
+            empty_spin_count = 0;
+
+            if (Policy::GetClaimed(head).exchange(true, std::memory_order_acq_rel)) {
+                T* next = Policy::GetNext(head).load(std::memory_order_acquire);
+                if (next) {
+                    T* expected = head;
+                    head_.compare_exchange_weak(expected, next,
+                        std::memory_order_acq_rel, std::memory_order_relaxed);
+                } else {
+                    T* tail = tail_.load(std::memory_order_acquire);
+                    if (tail == head) {
+                        T* expected_head = head;
+                        if (head_.compare_exchange_strong(expected_head, nullptr,
+                                std::memory_order_acq_rel, std::memory_order_relaxed)) {
+                            T* expected_tail = head;
+                            tail_.compare_exchange_strong(expected_tail, nullptr,
+                                std::memory_order_acq_rel, std::memory_order_relaxed);
+                        }
+                    }
+                    BTHREAD_MPMC_PAUSE();
+                }
+                continue;
+            }
+
+            T* next = Policy::GetNext(head).load(std::memory_order_acquire);
+
+            if (!next) {
+                T* expected_head = head;
+                if (head_.compare_exchange_strong(expected_head, nullptr,
+                        std::memory_order_acq_rel, std::memory_order_relaxed)) {
+                    T* expected_tail = head;
+                    tail_.compare_exchange_strong(expected_tail, nullptr,
+                        std::memory_order_acq_rel, std::memory_order_relaxed);
+
+                    return head;
+                }
+                Policy::GetClaimed(head).store(false, std::memory_order_relaxed);
+                BTHREAD_MPMC_PAUSE();
+                continue;
+            }
+
+            T* expected = head;
+            if (head_.compare_exchange_strong(expected, next,
+                    std::memory_order_acq_rel, std::memory_order_relaxed)) {
+                return head;
+            }
+
+            Policy::GetClaimed(head).store(false, std::memory_order_relaxed);
+            BTHREAD_MPMC_PAUSE();
+        }
+    }
+
+    int PopMultipleFromHead(T** buffer, int max_count) {
+        int count = 0;
+        while (count < max_count) {
+            T* item = PopFromHead();
+            if (!item) break;
+            buffer[count++] = item;
+        }
+        return count;
+    }
+
+    void Remove(T* item, std::atomic<bool>* is_waiting) {
+        if (!is_waiting) return;
+
+        bool expected = true;
+        if (!is_waiting->compare_exchange_strong(expected, false,
+                std::memory_order_acq_rel, std::memory_order_relaxed)) {
+            return;
+        }
+
+        Policy::GetClaimed(item).store(true, std::memory_order_release);
+    }
+
     bool IsEmpty() const {
         return head_.load(std::memory_order_acquire) == nullptr;
     }
@@ -196,7 +288,7 @@ private:
     std::atomic<T*> tail_{nullptr};
 };
 
-// Type alias for Butex waiter queue (uses embedded MpmcNode in TaskMeta)
+// Type alias for Butex waiter queue
 using ButexWaiterQueue = MpmcQueue<TaskMeta>;
 
 } // namespace bthread
